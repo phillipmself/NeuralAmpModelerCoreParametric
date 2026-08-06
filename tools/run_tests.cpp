@@ -7,6 +7,7 @@
 #include "test/test_conv_1x1.cpp"
 #include "test/test_convnet.cpp"
 #include "test/test_concat_wavenet.cpp"
+#include "test/test_concat_wavenet_parity.cpp"
 #include "test/test_dsp.cpp"
 #include "test/test_film.cpp"
 #include "test/test_film_realtime_safe.cpp"
@@ -122,6 +123,9 @@ int main()
   test_concat_wavenet::test_matches_manual_concat_wavenet();
   test_concat_wavenet::test_parser_validation();
   test_concat_wavenet::test_setparams_and_process_realtime_safe();
+  test_concat_wavenet_parity::test_matches_python_golden();
+  test_concat_wavenet_parity::test_matches_manual_concat_wavenet_real_weights();
+  test_concat_wavenet_parity::test_setparams_process_no_allocation_real_model();
 
   test_linear::test_direct_known_values();
   test_linear::test_fft_matches_direct_irregular_chunks();
