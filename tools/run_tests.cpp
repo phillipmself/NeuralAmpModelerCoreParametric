@@ -112,6 +112,9 @@ int main()
   test_hyperwavenet::test_reject_short_weight_blob();
   test_hyperwavenet::test_reject_export_offset_out_of_range();
   test_hyperwavenet::test_setparams_process_realtime_safe();
+  test_hyperwavenet::test_reject_packed_layers();
+  test_hyperwavenet::test_reject_duplicate_enum_names();
+  test_hyperwavenet::test_ignores_step_and_avoid_zero();
   test_hyperwavenet_parity::test_matches_python_golden_and_baked_wavenet();
   test_hyperwavenet_parity::test_setparams_process_no_allocation_real_model();
   test_concat_wavenet::test_load_control_and_continuous_encoding();

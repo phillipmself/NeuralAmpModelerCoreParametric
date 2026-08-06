@@ -2,10 +2,8 @@
 
 #include <algorithm>
 #include <cassert>
-#include <cmath>
 #include <stdexcept>
 #include <string>
-#include <unordered_set>
 #include <utility>
 
 #include "../registry.h"
@@ -22,90 +20,15 @@ std::vector<float> nominal_from_specs(const std::vector<nam::ParamSpec>& specs)
   return nominal;
 }
 
-bool is_int_like(const float value)
+void reject_packed_layers(const nlohmann::json& config)
 {
-  return std::isfinite(value) && std::trunc(value) == value;
-}
-
-void validate_params_json(const nlohmann::json& params_json)
-{
-  if (!params_json.is_array())
-    throw std::runtime_error("HyperWaveNet config: 'params' must be an array of objects.");
-  if (params_json.empty())
-    throw std::runtime_error("HyperWaveNet config: 'params' array must contain at least one parameter.");
-}
-
-std::vector<nam::ParamSpec> parse_params(const nlohmann::json& config)
-{
-  if (!config.contains("params"))
-    throw std::runtime_error("HyperWaveNet config missing 'params' array.");
-
-  const auto& params_json = config.at("params");
-  validate_params_json(params_json);
-
-  std::vector<nam::ParamSpec> params;
-  std::unordered_set<std::string> seen_names;
-  params.reserve(params_json.size());
-  for (size_t i = 0; i < params_json.size(); ++i)
+  if (!config.contains("layers") || !config.at("layers").is_array())
+    return;
+  for (const auto& layer : config.at("layers"))
   {
-    const auto& entry = params_json.at(i);
-    const auto where = "HyperWaveNet config: params[" + std::to_string(i) + "]";
-    if (!entry.is_object())
-      throw std::runtime_error(where + " must be an object.");
-    if (!entry.contains("name") || !entry.contains("min") || !entry.contains("max") || !entry.contains("default"))
-      throw std::runtime_error(where + " must define name/min/max/default.");
-
-    nam::ParamSpec spec;
-    spec.name = entry.at("name").get<std::string>();
-    spec.min = entry.at("min").get<float>();
-    spec.max = entry.at("max").get<float>();
-    spec.defaultValue = entry.at("default").get<float>();
-    spec.type = entry.value("type", std::string("continuous"));
-    if (entry.contains("enum_names") && !entry.at("enum_names").is_null())
-      spec.enum_names = entry.at("enum_names").get<std::vector<std::string>>();
-
-    const auto named = "HyperWaveNet config: param '" + spec.name + "'";
-    if (spec.name.empty())
-      throw std::runtime_error(where + " name must be non-empty.");
-    if (!seen_names.insert(spec.name).second)
-      throw std::runtime_error(named + " duplicates an earlier parameter name.");
-    if (!std::isfinite(spec.min) || !std::isfinite(spec.max) || !std::isfinite(spec.defaultValue))
-      throw std::runtime_error(named + " has non-finite min/max/default.");
-
-    if (spec.type == "continuous")
-    {
-      if (!spec.enum_names.empty())
-        throw std::runtime_error(named + " is continuous and cannot define enum_names.");
-      if (spec.min >= spec.max)
-        throw std::runtime_error(named + " must satisfy min < max.");
-      if (spec.defaultValue < spec.min || spec.defaultValue > spec.max)
-        throw std::runtime_error(named + " default must lie within [min, max].");
-      params.push_back(std::move(spec));
-      continue;
-    }
-
-    if (spec.type != "switch")
-      throw std::runtime_error(named + " has unsupported type '" + spec.type + "'.");
-    if (spec.enum_names.size() < 2)
-      throw std::runtime_error(named + " switch parameters require at least two enum_names.");
-    if (!is_int_like(spec.min) || !is_int_like(spec.max) || !is_int_like(spec.defaultValue))
-      throw std::runtime_error(named + " switch min/max/default must be integer indices.");
-
-    const auto expected_max = static_cast<int>(spec.enum_names.size()) - 1;
-    const auto min_index = static_cast<int>(spec.min);
-    const auto max_index = static_cast<int>(spec.max);
-    const auto default_index = static_cast<int>(spec.defaultValue);
-    if (min_index != 0 || max_index != expected_max)
-    {
-      throw std::runtime_error(named + " switch range must be [0, " + std::to_string(expected_max) + "].");
-    }
-    if (default_index < min_index || default_index > max_index)
-      throw std::runtime_error(named + " default switch index must lie within range.");
-
-    params.push_back(std::move(spec));
+    if (layer.contains("packing") && !layer.at("packing").is_null())
+      throw std::runtime_error("HyperWaveNet does not support packed layer arrays");
   }
-
-  return params;
 }
 
 nam::HypernetSpec parse_hypernet(const nlohmann::json& config)
@@ -371,9 +294,11 @@ std::unique_ptr<ModelConfig> create_hyperwavenet_config(const nlohmann::json& co
       "nested support can be added later in the loader without redesigning the DSP.");
   }
 
+  reject_packed_layers(config);
+
   auto hyperwavenet_config = std::make_unique<HyperWaveNetConfig>();
   hyperwavenet_config->inner = parse_config_json(config, sampleRate);
-  hyperwavenet_config->params = parse_params(config);
+  hyperwavenet_config->params = nam::parse_param_specs(config, "HyperWaveNet");
   hyperwavenet_config->hypernet = parse_hypernet(config);
   return hyperwavenet_config;
 }

@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "json.hpp"
+
 namespace nam
 {
 
@@ -31,6 +33,13 @@ struct ParamSpec
     return 1;
   }
 };
+
+/// \brief Parse `config["params"]` into a vector of ParamSpec, applying the shared
+/// validation rules mirrored from Python's ParamSpec.__post_init__ (nam/models/parametric/_spec.py).
+///
+/// `model_name` is used only to prefix error messages (e.g. "HyperWaveNet config: ...").
+/// \throws std::runtime_error on any malformed or invalid entry.
+std::vector<ParamSpec> parse_param_specs(const nlohmann::json& config, const std::string& model_name);
 
 /// \brief Interface for DSP objects that support runtime parameter control.
 ///

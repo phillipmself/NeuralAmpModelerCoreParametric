@@ -422,4 +422,88 @@ void test_setparams_process_realtime_safe()
     assert(std::isfinite(sample));
 }
 
+void test_reject_packed_layers()
+{
+  auto config = make_config();
+  config["config"]["layers"][0]["packing"] = {{"num_models", 2}};
+
+  assert_throws_runtime_error([&]() { (void)nam::get_dsp(config); }, "packed");
+}
+
+void test_reject_duplicate_enum_names()
+{
+  // The enum_names non-empty/uniqueness check previously only fired for ConcatWaveNet;
+  // it now runs through the shared parser for HyperWaveNet too.
+  auto config = make_config();
+  config["config"]["params"] = nlohmann::json::array({
+    {{"name", "mode"},
+     {"min", 0.0},
+     {"max", 2.0},
+     {"default", 0.0},
+     {"type", "switch"},
+     {"enum_names", {"same", "same", "other"}}},
+  });
+
+  assert_throws_runtime_error([&]() { (void)nam::get_dsp(config); }, "unique");
+}
+
+void test_ignores_step_and_avoid_zero()
+{
+  // "step" and "avoid_zero" are capture-planning metadata the trainer writes into every
+  // params[] entry (nam/models/parametric/_spec.py). They are not runtime concerns: the
+  // parser must silently ignore them rather than rejecting the config or surfacing them.
+  // This includes the switch shape the trainer emits ("step": null, "avoid_zero": false),
+  // which would be rejected outright if the parser still validated these fields.
+  auto config = make_config();
+  config["config"]["params"] = nlohmann::json::array({
+    {{"name", "drive"},
+     {"min", 0.0},
+     {"max", 1.0},
+     {"default", 0.5},
+     {"type", "continuous"},
+     {"step", 0.5},
+     {"avoid_zero", true}},
+    {{"name", "mode"},
+     {"min", 0.0},
+     {"max", 1.0},
+     {"default", 0.0},
+     {"type", "switch"},
+     {"enum_names", {"a", "b"}},
+     {"step", nullptr},
+     {"avoid_zero", false}},
+  });
+  // Adding the "mode" switch grows the encoded param dim from 1 (drive only) to 3
+  // (drive + a 2-way one-hot), which grows the hypernet's final-layer weight count from
+  // 1 to 3. Re-size the weight blob to match: base (8, unchanged) + final weight (3) +
+  // final bias (1) + anchor (1) = 13.
+  config["weights"] = nlohmann::json::array({
+    1.0f,
+    1.0f,
+    0.0f,
+    1.0f,
+    1.0f,
+    0.0f,
+    1.0f,
+    1.0f, // base WaveNet (8)
+    1.0f,
+    0.0f,
+    0.0f, // hypernet final weight (final_out=1 x encoded_dim=3)
+    0.0f, // hypernet final bias
+    0.0f, // hypernet anchor
+  });
+
+  auto dsp = nam::get_dsp(config);
+  auto* control = dynamic_cast<nam::IParametricControl*>(dsp.get());
+  assert(control != nullptr);
+  const auto& specs = control->GetParamSpecs();
+  assert(specs.size() == 2);
+  assert(specs[0].name == "drive");
+  assert(specs[0].min == 0.0f);
+  assert(specs[0].max == 1.0f);
+  assert(specs[0].defaultValue == 0.5f);
+  assert(specs[0].type == "continuous");
+  assert(specs[1].name == "mode");
+  assert(specs[1].enum_names.size() == 2);
+}
+
 } // namespace test_hyperwavenet
