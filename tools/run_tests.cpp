@@ -340,6 +340,9 @@ int main()
   test_get_dsp::test_version_too_early();
   test_get_dsp::test_is_version_supported_core_behavior();
   test_get_dsp::test_register_custom_version_support_checker();
+  test_get_dsp::test_parametric_architecture_registry();
+  test_get_dsp::test_parametric_version_grading();
+  test_get_dsp::test_verify_config_version_is_architecture_scoped();
   test_get_dsp::test_get_dsp_default_allows_constructor_reset_prewarm();
   test_get_dsp::test_get_dsp_default_inherits_scoped_prewarm_default();
   test_get_dsp::test_get_dsp_prewarm_option_suppresses_constructor_reset_prewarm();

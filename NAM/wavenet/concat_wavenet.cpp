@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "../registry.h"
+#include "../parametric_version.h"
 
 namespace
 {
@@ -250,4 +251,5 @@ std::unique_ptr<ModelConfig> create_concat_wavenet_config(const nlohmann::json& 
 namespace
 {
 static nam::ConfigParserHelper _register_ConcatWaveNet("ConcatWaveNet", nam::wavenet::create_concat_wavenet_config);
+static nam::ParametricArchitectureHelper _register_parametric_ConcatWaveNet("ConcatWaveNet");
 }

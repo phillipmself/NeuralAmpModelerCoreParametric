@@ -10,6 +10,7 @@
 #include "json.hpp"
 #include "get_dsp.h"
 #include "model_config.h"
+#include "parametric_version.h"
 
 namespace nam
 {
@@ -141,7 +142,7 @@ std::vector<float> GetWeights(nlohmann::json const& j)
 
 void populate_dsp_data(const nlohmann::json& config, dspData& returnedConfig)
 {
-  verify_config_version(config["version"].get<std::string>());
+  verify_config_version(config["version"].get<std::string>(), config.value("architecture", std::string{}));
 
   nlohmann::json config_json = config["config"];
   std::vector<float> weights = GetWeights(config);
@@ -240,7 +241,7 @@ namespace
 
 std::unique_ptr<DSP> get_dsp_with_current_prewarm_default(dspData& conf)
 {
-  verify_config_version(conf.version);
+  verify_config_version(conf.version, conf.architecture);
 
   // Extract metadata from JSON
   ModelMetadata metadata;

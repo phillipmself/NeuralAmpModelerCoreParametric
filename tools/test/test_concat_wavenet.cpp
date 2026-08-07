@@ -66,7 +66,7 @@ std::vector<float> weights_selecting(const int selected_input)
 nlohmann::json model_json(const int selected_input = 1)
 {
   return nlohmann::json{
-    {"version", "0.7.0"},       {"metadata", nlohmann::json::object()},         {"architecture", "ConcatWaveNet"},
+    {"version", "1.0.0"},       {"metadata", nlohmann::json::object()},         {"architecture", "ConcatWaveNet"},
     {"config", inner_config()}, {"weights", weights_selecting(selected_input)}, {"sample_rate", 48000},
   };
 }
@@ -160,6 +160,9 @@ void test_matches_manual_concat_wavenet()
 
   auto plain_json = model_json(4);
   plain_json["architecture"] = "WaveNet";
+  // Now a stock WaveNet: it must declare the stock file-version namespace, not the
+  // parametric one carried over from the ConcatWaveNet config.
+  plain_json["version"] = "0.7.0";
   plain_json["config"] = inner_config(true);
   plain_json["config"].erase("params");
   plain_json["config"]["in_channels"] = 5;
