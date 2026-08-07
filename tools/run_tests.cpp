@@ -6,11 +6,16 @@
 #include "test/test_conv1d.cpp"
 #include "test/test_conv_1x1.cpp"
 #include "test/test_convnet.cpp"
+#include "test/test_concat_wavenet.cpp"
+#include "test/test_concat_wavenet_parity.cpp"
 #include "test/test_dsp.cpp"
 #include "test/test_film.cpp"
 #include "test/test_film_realtime_safe.cpp"
 #include "test/test_fast_lut.cpp"
 #include "test/test_get_dsp.cpp"
+#include "test/test_hypernet.cpp"
+#include "test/test_hyperwavenet.cpp"
+#include "test/test_hyperwavenet_parity.cpp"
 #include "test/test_ring_buffer.cpp"
 #include "test/test_wavenet/test_layer.cpp"
 #include "test/test_wavenet/test_layer_array.cpp"
@@ -90,6 +95,37 @@ int main()
   test_dsp::test_reset_and_prewarm_forces_prewarm();
   test_dsp::test_reset_and_prewarm_restores_prewarm_on_throw();
   test_dsp::test_scoped_prewarm_on_reset_default();
+
+  test_hypernet::test_encode_continuous_and_switch();
+  test_hypernet::test_switch_validation();
+  test_hypernet::test_full_mode_decode();
+  test_hypernet::test_low_rank_decode();
+  test_hypernet::test_apply_conditioning_offsets();
+  test_hypernet::test_constructor_validation();
+  test_hypernet::test_mixed_targets_and_repeated_calls();
+  test_hyperwavenet::test_load_and_control_hyperwavenet();
+  test_hyperwavenet::test_load_and_control_low_rank_hyperwavenet();
+  test_hyperwavenet::test_reject_condition_dsp_for_now();
+  test_hyperwavenet::test_reject_duplicate_param_names();
+  test_hyperwavenet::test_reject_switch_param_out_of_range();
+  test_hyperwavenet::test_reject_non_integer_switch_index();
+  test_hyperwavenet::test_reject_low_rank_target_under_full_mode();
+  test_hyperwavenet::test_reject_short_weight_blob();
+  test_hyperwavenet::test_reject_export_offset_out_of_range();
+  test_hyperwavenet::test_setparams_process_realtime_safe();
+  test_hyperwavenet::test_reject_packed_layers();
+  test_hyperwavenet::test_reject_duplicate_enum_names();
+  test_hyperwavenet::test_ignores_step_and_avoid_zero();
+  test_hyperwavenet_parity::test_matches_python_golden_and_baked_wavenet();
+  test_hyperwavenet_parity::test_setparams_process_no_allocation_real_model();
+  test_concat_wavenet::test_load_control_and_continuous_encoding();
+  test_concat_wavenet::test_switch_one_hot_encoding();
+  test_concat_wavenet::test_matches_manual_concat_wavenet();
+  test_concat_wavenet::test_parser_validation();
+  test_concat_wavenet::test_setparams_and_process_realtime_safe();
+  test_concat_wavenet_parity::test_matches_python_golden();
+  test_concat_wavenet_parity::test_matches_manual_concat_wavenet_real_weights();
+  test_concat_wavenet_parity::test_setparams_process_no_allocation_real_model();
 
   test_linear::test_direct_known_values();
   test_linear::test_fft_matches_direct_irregular_chunks();
