@@ -11,6 +11,7 @@
 
 #include "NAM/get_dsp.h"
 #include "NAM/registry.h"
+#include "NAM/parametric_version.h"
 
 namespace test_get_dsp
 {
@@ -317,6 +318,68 @@ void test_register_custom_version_support_checker()
   assert(nam::is_version_supported("DEMO::1.0.0") == nam::Supported::YES);
   assert(nam::is_version_supported("DEMO::1.0.3") == nam::Supported::PARTIAL);
   assert(nam::is_version_supported("DEMO::2.0.0") == nam::Supported::NO);
+}
+
+namespace
+{
+bool verify_config_version_throws(const std::string& version, const std::string& architecture)
+{
+  try
+  {
+    nam::verify_config_version(version, architecture);
+    return false;
+  }
+  catch (const std::runtime_error&)
+  {
+    return true;
+  }
+}
+} // namespace
+
+void test_parametric_architecture_registry()
+{
+  // Registered at static-init time next to each parametric config parser.
+  assert(nam::is_parametric_architecture("HyperWaveNet"));
+  assert(nam::is_parametric_architecture("ConcatWaveNet"));
+  // Stock architectures are not parametric.
+  assert(!nam::is_parametric_architecture("WaveNet"));
+  assert(!nam::is_parametric_architecture("LSTM"));
+  assert(!nam::is_parametric_architecture(""));
+}
+
+void test_parametric_version_grading()
+{
+  assert(nam::is_parametric_version_supported(nam::LATEST_FULLY_SUPPORTED_PARAMETRIC_NAM_FILE_VERSION)
+         == nam::Supported::YES);
+
+  // Patch beyond latest -> partial.
+  nam::Version patchBeyond = nam::ParseVersion(nam::LATEST_FULLY_SUPPORTED_PARAMETRIC_NAM_FILE_VERSION);
+  patchBeyond.patch++;
+  assert(nam::is_parametric_version_supported(patchBeyond.toString()) == nam::Supported::PARTIAL);
+
+  // Minor beyond latest -> no.
+  nam::Version minorBeyond = nam::ParseVersion(nam::LATEST_FULLY_SUPPORTED_PARAMETRIC_NAM_FILE_VERSION);
+  minorBeyond.minor++;
+  minorBeyond.patch = 0;
+  assert(nam::is_parametric_version_supported(minorBeyond.toString()) == nam::Supported::NO);
+
+  // Stock 0.x range is rejected by the parametric grader.
+  assert(nam::is_parametric_version_supported("0.7.0") == nam::Supported::NO);
+  assert(nam::is_parametric_version_supported("not.a.version") == nam::Supported::NO);
+}
+
+void test_verify_config_version_is_architecture_scoped()
+{
+  // Stock architecture keeps the stock semantics.
+  assert(!verify_config_version_throws("0.7.0", "WaveNet"));
+  // A future upstream stock model at major 1 must NOT load into this parametric build.
+  assert(verify_config_version_throws("1.0.0", "WaveNet"));
+
+  // Parametric architectures accept the parametric namespace...
+  assert(!verify_config_version_throws("1.0.0", "HyperWaveNet"));
+  assert(!verify_config_version_throws("1.0.0", "ConcatWaveNet"));
+  // ...and reject stale stock-era parametric exports.
+  assert(verify_config_version_throws("0.7.0", "HyperWaveNet"));
 }
 
 void test_get_dsp_default_allows_constructor_reset_prewarm()

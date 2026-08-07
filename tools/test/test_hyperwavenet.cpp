@@ -21,7 +21,7 @@ namespace
 nlohmann::json make_config()
 {
   return nlohmann::json{
-    {"version", "0.7.0"},
+    {"version", "1.0.0"},
     {"metadata", nlohmann::json::object()},
     {"architecture", "HyperWaveNet"},
     {"config",
@@ -80,7 +80,7 @@ nlohmann::json make_config()
 nlohmann::json make_low_rank_config()
 {
   return nlohmann::json{
-    {"version", "0.7.0"},
+    {"version", "1.0.0"},
     {"metadata", nlohmann::json::object()},
     {"architecture", "HyperWaveNet"},
     {"config",

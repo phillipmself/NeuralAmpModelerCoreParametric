@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "../registry.h"
+#include "../parametric_version.h"
 
 namespace
 {
@@ -309,4 +310,5 @@ std::unique_ptr<ModelConfig> create_hyperwavenet_config(const nlohmann::json& co
 namespace
 {
 static nam::ConfigParserHelper _register_HyperWaveNet("HyperWaveNet", nam::wavenet::create_hyperwavenet_config);
+static nam::ParametricArchitectureHelper _register_parametric_HyperWaveNet("HyperWaveNet");
 }

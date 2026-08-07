@@ -188,6 +188,9 @@ void test_matches_manual_concat_wavenet_real_weights()
   // in_channels from the specs, so a plain WaveNet has to be told it explicitly.
   auto plain_json = model_json;
   plain_json["architecture"] = "WaveNet";
+  // Re-badged as stock: declare the stock file-version namespace, not the parametric
+  // one carried over from the ConcatWaveNet fixture.
+  plain_json["version"] = "0.7.0";
   plain_json["config"].erase("params");
   plain_json["config"]["in_channels"] = in_channels;
   auto plain = nam::get_dsp(plain_json);
