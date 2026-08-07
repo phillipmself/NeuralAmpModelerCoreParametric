@@ -1,10 +1,17 @@
-# NeuralAmpModelerCore
+# NeuralAmpModelerCoreParametric
 
-[![Build](https://github.com/sdatkinson/NeuralAmpModelerCore/actions/workflows/build.yml/badge.svg)](https://github.com/sdatkinson/NeuralAmpModelerCore/actions/workflows/build.yml)
+[![Build](https://github.com/phillipmself/NeuralAmpModelerCoreParametric/actions/workflows/build.yml/badge.svg)](https://github.com/phillipmself/NeuralAmpModelerCoreParametric/actions/workflows/build.yml)
 
 Core C++ DSP library for NAM plugins.
 
-For an example of how to use, see [NeuralAmpModelerPlugin](https://github.com/sdatkinson/NeuralAmpModelerPlugin).
+This is a fork of [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore) that adds
+runtime support for **parametric** models (`HyperWaveNet` / `ConcatWaveNet`) — WaveNet architectures
+whose weights are conditioned at runtime by a hypernetwork or concatenated control inputs, enabling
+continuous, knob-controllable parameters on a loaded `.nam` model.
+
+For an example of how to use, see [NamParametricPlugin](https://github.com/phillipmself/NamParametricPlugin),
+since the upstream [NeuralAmpModelerPlugin](https://github.com/sdatkinson/NeuralAmpModelerPlugin) cannot load
+this fork's parametric models.
 
 ## Included Tools
 
@@ -24,5 +31,8 @@ This library uses [Eigen](http://eigen.tuxfamily.org) to do the linear algebra r
   <img src="media/tone3000-logo.svg" alt="Tone3000 logo">
 </div>
 
-Development of version 0.4.0 of this library has been generously supported by [TONE3000](https://tone3000.com). 
+Development of version 0.4.0 of the upstream [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore)
+library (which this fork is based on) was generously supported by [TONE3000](https://tone3000.com). Note that
+TONE3000 has no involvement in this fork or its parametric-model features — please direct any questions about
+that work here, not to them.
 **Thank you!**
