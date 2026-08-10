@@ -5,6 +5,7 @@
 #include <span>
 #include <vector>
 
+#include "../concat_conditioner.h"
 #include "../model_config.h"
 #include "../parametric_control.h"
 #include "model.h"
@@ -17,8 +18,14 @@ namespace wavenet
 /// WaveNet conditioned by concatenating encoded controls with the audio input.
 ///
 /// The wrapped WaveNet has 1 + encoded_param_dim input channels, while this DSP
-/// exposes the single audio channel expected by a NAM host. Continuous controls
-/// are min-max encoded to [-1, 1]; switches are one-hot encoded.
+/// exposes the single audio channel expected by a NAM host. All of the parameter
+/// state -- encoding, smoothing, and the concatenated input buffers -- lives in the
+/// composed ConcatConditioner, so this class is just the WaveNet-specific plumbing
+/// around it.
+///
+/// This model smooths (see IParametricControl): the controls are extra input channels,
+/// so the conditioning can move per sample and a knob move leaves no step. Continuous
+/// controls are ramped; switches jump. See ConcatConditioner for the details.
 class ConcatWaveNet : public DSP, public IParametricControl
 {
 public:
@@ -38,18 +45,13 @@ protected:
   void SetMaxBufferSize(int maxBufferSize) override;
 
 private:
-  void _encode_params();
 #ifndef NDEBUG
   void _debug_enter_param_api_();
   void _debug_leave_param_api_();
 #endif
 
   std::unique_ptr<WaveNet> _wavenet;
-  std::vector<ParamSpec> _param_specs;
-  std::vector<float> _params;
-  std::vector<float> _encoded_params;
-  std::vector<std::vector<NAM_SAMPLE>> _input_buffers;
-  std::vector<NAM_SAMPLE*> _input_ptrs;
+  ConcatConditioner _conditioner;
 #ifndef NDEBUG
   std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
 #endif

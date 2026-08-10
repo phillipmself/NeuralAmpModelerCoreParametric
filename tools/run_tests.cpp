@@ -34,6 +34,8 @@
 #include "test/test_linear.cpp"
 #include "test/test_lstm.cpp"
 #include "test/test_lstm_realtime_safe.cpp"
+#include "test/test_param_ramp.cpp"
+#include "test/test_param_smoothing.cpp"
 #include "test/test_wavenet_configurable_gating.cpp"
 #include "test/test_noncontiguous_blocks.cpp"
 #include "test/test_extensible.cpp"
@@ -126,6 +128,22 @@ int main()
   test_concat_wavenet_parity::test_matches_python_golden();
   test_concat_wavenet_parity::test_matches_manual_concat_wavenet_real_weights();
   test_concat_wavenet_parity::test_setparams_process_no_allocation_real_model();
+
+  test_param_ramp::test_snap_is_immediate();
+  test_param_ramp::test_lands_exactly_on_target();
+  test_param_ramp::test_advance_past_end_clamps();
+  test_param_ramp::test_retarget_restarts_from_current();
+  test_param_ramp::test_redundant_target_is_ignored();
+  test_param_ramp::test_excluded_values_jump();
+  test_param_ramp::test_zero_length_ramp_steps();
+  test_param_ramp::test_step_matches_advance();
+
+  test_param_smoothing::test_concat_wavenet_conditioning_is_continuous();
+  test_param_smoothing::test_concat_wavenet_switch_steps();
+  test_param_smoothing::test_hyperwavenet_applies_immediately();
+  test_param_smoothing::test_settles_on_the_committed_value();
+  test_param_smoothing::test_reset_settles_rather_than_ramping();
+  test_param_smoothing::test_ramping_is_realtime_safe();
 
   test_linear::test_direct_known_values();
   test_linear::test_fft_matches_direct_irregular_chunks();
