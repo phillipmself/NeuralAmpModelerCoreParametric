@@ -10,6 +10,7 @@
 #include "json.hpp"
 
 #include "NAM/get_dsp.h"
+#include "NAM/param_ramp.h"
 #include "NAM/model_config.h"
 #include "NAM/parametric_control.h"
 #include "allocation_tracking.h"
@@ -82,6 +83,17 @@ std::vector<float> process(nam::DSP& dsp, const float input_value = 0.25f)
   return std::vector<float>(output.begin(), output.end());
 }
 
+// Continuous controls are ramped to rather than applied instantly, so run the ramp out
+// before asserting on the encoding itself. Derived from the ramp length rather than
+// hard-coded, so retuning it does not silently gut these tests.
+void settle_params(nam::DSP& dsp, const float input_value = 0.25f)
+{
+  constexpr float ramp_frames = 48000.0f * nam::kDefaultParamRampSeconds;
+  const int settle_blocks = static_cast<int>(ramp_frames / 8.0f) + 8;
+  for (int i = 0; i < settle_blocks; ++i)
+    (void)process(dsp, input_value);
+}
+
 template <typename Fn>
 void assert_runtime_error(Fn&& fn, const std::string& text)
 {
@@ -118,6 +130,7 @@ void test_load_control_and_continuous_encoding()
   dsp->Reset(48000.0, 16);
   const auto nominal = process(*dsp);
   control->SetParams(std::array<float, 2>{10.0f, 1.0f});
+  settle_params(*dsp);
   const auto maximum = process(*dsp);
   for (size_t i = 0; i < nominal.size(); ++i)
   {

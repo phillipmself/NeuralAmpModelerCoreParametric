@@ -54,9 +54,20 @@ std::vector<ParamSpec> parse_param_specs(const nlohmann::json& config, const std
 /// - A common pattern is for the audio thread to call SetParams() between
 ///   process() blocks, after the previous block has completed and before the
 ///   next block begins.
-/// - process() consumes the most recently committed vector for the full block.
 /// - SetParams() is allocation-free after construction (storage is pre-sized
 ///   from the parameter count at object creation).
+///
+/// Smoothing is left to the implementation, because whether a control *can* move without a
+/// step depends on how it reaches the audio -- so the two behaviours below are contractual,
+/// but which one an implementation exhibits is documented on that class, not here:
+/// - An implementation that smooths treats a committed vector as a destination rather than
+///   something applied instantly, and GetParams() then reports that destination rather than
+///   the value currently in effect.
+/// - An implementation that does not smooth applies the committed vector on the next
+///   process() call, and GetParams() reflects it immediately.
+/// - Either way, Reset() settles immediately on the committed vector rather than ramping into
+///   it: a reset is a stream restart, and a freshly loaded model must not glide from its
+///   defaults to the host's restored values.
 class IParametricControl
 {
 public:

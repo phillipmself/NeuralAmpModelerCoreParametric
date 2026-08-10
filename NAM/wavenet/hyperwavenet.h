@@ -16,6 +16,15 @@ namespace nam
 namespace wavenet
 {
 
+/// WaveNet whose weights are regenerated from the controls by a hypernetwork.
+///
+/// This model does NOT smooth (see IParametricControl). Its controls reach the audio only by
+/// regenerating weights, and weights can only change between process() calls, so its transfer
+/// function is quantised to the block grid no matter what. Ramping does not remove that
+/// discontinuity, only relocate it -- from the host's control-commit rate up to the block
+/// rate, where it is a clearly audible tone -- while regenerating the whole weight set every
+/// block. It was implemented, measured and removed; do not add it back without measuring both
+/// the spectrum and the cost. test_hyperwavenet_applies_immediately() carries the numbers.
 class HyperWaveNet : public WaveNet, public IParametricControl
 {
 public:

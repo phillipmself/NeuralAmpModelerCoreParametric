@@ -183,8 +183,14 @@ void HyperWaveNet::SetParams(const std::span<const float> params)
   {
 #endif
     _hypernet.ValidateParams(params);
-    std::copy(params.begin(), params.end(), _params.begin());
-    _dirty = true;
+    // Regenerating the whole weight set is this model's one expensive operation, so a commit
+    // that does not move any control leaves the weights alone. A host that pushes the same
+    // vector every block therefore does not re-run the hypernet forever.
+    if (!std::equal(params.begin(), params.end(), _params.begin()))
+    {
+      std::copy(params.begin(), params.end(), _params.begin());
+      _dirty = true;
+    }
 #ifndef NDEBUG
   }
   catch (...)

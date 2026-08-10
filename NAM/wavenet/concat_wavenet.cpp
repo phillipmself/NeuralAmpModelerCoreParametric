@@ -1,32 +1,12 @@
 #include "concat_wavenet.h"
 
-#include <algorithm>
 #include <cassert>
-#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "../registry.h"
 #include "../parametric_version.h"
-
-namespace
-{
-
-bool is_int_like(const float value)
-{
-  return std::isfinite(value) && std::trunc(value) == value;
-}
-
-int encoded_param_dim(const std::vector<nam::ParamSpec>& params)
-{
-  int dim = 0;
-  for (const auto& spec : params)
-    dim += spec.num_inputs();
-  return dim;
-}
-
-} // namespace
 
 namespace nam
 {
@@ -37,21 +17,13 @@ ConcatWaveNet::ConcatWaveNet(std::unique_ptr<WaveNet> wavenet, std::vector<Param
                              const double sample_rate)
 : DSP(1, wavenet == nullptr ? 1 : wavenet->NumOutputChannels(), sample_rate)
 , _wavenet(std::move(wavenet))
-, _param_specs(std::move(param_specs))
-, _params(_param_specs.size())
-, _encoded_params(static_cast<size_t>(encoded_param_dim(_param_specs)))
-, _input_buffers(_encoded_params.size() + 1)
-, _input_ptrs(_encoded_params.size() + 1)
+, _conditioner(std::move(param_specs))
 {
   if (_wavenet == nullptr)
     throw std::invalid_argument("ConcatWaveNet: inner WaveNet must not be null");
-  if (_param_specs.empty())
-    throw std::invalid_argument("ConcatWaveNet: param_specs must contain at least one parameter");
-  if (_wavenet->NumInputChannels() != static_cast<int>(_input_buffers.size()))
+  if (_wavenet->NumInputChannels() != _conditioner.NumInputChannels())
     throw std::invalid_argument("ConcatWaveNet: inner WaveNet input channel count does not match encoded params");
-  for (size_t i = 0; i < _param_specs.size(); ++i)
-    _params[i] = _param_specs[i].defaultValue;
-  _encode_params();
+  _conditioner.Configure(sample_rate);
 }
 
 void ConcatWaveNet::SetParams(const std::span<const float> params)
@@ -61,21 +33,7 @@ void ConcatWaveNet::SetParams(const std::span<const float> params)
   try
   {
 #endif
-    if (params.size() != _params.size())
-      throw std::invalid_argument("ConcatWaveNet::SetParams: expected " + std::to_string(_params.size())
-                                  + " params, got " + std::to_string(params.size()));
-    for (size_t i = 0; i < _param_specs.size(); ++i)
-    {
-      const auto& spec = _param_specs[i];
-      if (spec.type != "switch")
-        continue;
-      if (!is_int_like(params[i]) || params[i] < 0.0f || params[i] >= static_cast<float>(spec.num_inputs()))
-        throw std::invalid_argument("ConcatWaveNet switch parameter '" + spec.name
-                                    + "' must be an integer index within [0, " + std::to_string(spec.num_inputs() - 1)
-                                    + "]");
-    }
-    std::copy(params.begin(), params.end(), _params.begin());
-    _encode_params();
+    _conditioner.SetParams(params);
 #ifndef NDEBUG
   }
   catch (...)
@@ -92,7 +50,7 @@ std::span<const float> ConcatWaveNet::GetParams() const
 #ifndef NDEBUG
   const_cast<ConcatWaveNet*>(this)->_debug_enter_param_api_();
 #endif
-  const auto result = std::span<const float>(_params);
+  const auto result = _conditioner.Params();
 #ifndef NDEBUG
   const_cast<ConcatWaveNet*>(this)->_debug_leave_param_api_();
 #endif
@@ -101,32 +59,12 @@ std::span<const float> ConcatWaveNet::GetParams() const
 
 int ConcatWaveNet::ParamDim() const
 {
-  return static_cast<int>(_params.size());
+  return _conditioner.ParamDim();
 }
 
 const std::vector<ParamSpec>& ConcatWaveNet::GetParamSpecs() const
 {
-  return _param_specs;
-}
-
-void ConcatWaveNet::_encode_params()
-{
-  size_t encoded_index = 0;
-  for (size_t i = 0; i < _param_specs.size(); ++i)
-  {
-    const auto& spec = _param_specs[i];
-    if (spec.type == "switch")
-    {
-      std::fill_n(_encoded_params.begin() + static_cast<std::ptrdiff_t>(encoded_index), spec.num_inputs(), 0.0f);
-      _encoded_params[encoded_index + static_cast<size_t>(_params[i])] = 1.0f;
-      encoded_index += static_cast<size_t>(spec.num_inputs());
-    }
-    else
-    {
-      const auto fraction = (_params[i] - spec.min) / (spec.max - spec.min);
-      _encoded_params[encoded_index++] = -1.0f + 2.0f * fraction;
-    }
-  }
+  return _conditioner.ParamSpecs();
 }
 
 void ConcatWaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames)
@@ -137,10 +75,7 @@ void ConcatWaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int n
   {
 #endif
     assert(num_frames <= mMaxBufferSize);
-    std::copy_n(input[0], num_frames, _input_buffers[0].begin());
-    for (size_t ch = 0; ch < _encoded_params.size(); ++ch)
-      std::fill_n(_input_buffers[ch + 1].begin(), num_frames, static_cast<NAM_SAMPLE>(_encoded_params[ch]));
-    _wavenet->process(_input_ptrs.data(), output, num_frames);
+    _wavenet->process(_conditioner.PrepareBlock(input[0], num_frames), output, num_frames);
 #ifndef NDEBUG
   }
   catch (...)
@@ -166,6 +101,11 @@ void ConcatWaveNet::Reset(const double sampleRate, const int maxBufferSize)
     throw;
   }
   _wavenet->SetPrewarmOnReset(prewarm_on_reset);
+  // Settle before DSP::Reset(), which prewarms through process(): a reset is a stream
+  // restart, so the committed controls apply immediately rather than being ramped into.
+  // This is also what keeps a model load from gliding -- the host resets the newly loaded
+  // model, and two models need not share a parameter set at all.
+  _conditioner.Configure(sampleRate);
   DSP::Reset(sampleRate, maxBufferSize);
 }
 
@@ -183,11 +123,7 @@ int ConcatWaveNet::GetPrewarmSamples()
 void ConcatWaveNet::SetMaxBufferSize(const int maxBufferSize)
 {
   DSP::SetMaxBufferSize(maxBufferSize);
-  for (size_t ch = 0; ch < _input_buffers.size(); ++ch)
-  {
-    _input_buffers[ch].resize(maxBufferSize);
-    _input_ptrs[ch] = _input_buffers[ch].data();
-  }
+  _conditioner.SetMaxBufferSize(maxBufferSize);
 }
 
 #ifndef NDEBUG
