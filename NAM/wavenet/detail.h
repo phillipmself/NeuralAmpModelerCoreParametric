@@ -50,7 +50,12 @@ public:
   , _activation(activations::Activation::get_activation(params.activation_config))
   , _gating_mode(params.gating_mode)
   , _bottleneck(params.bottleneck)
+  , _film_controlled(params.film_condition_size.has_value())
   {
+    // FiLM-controlled layers condition every FiLM on the (constant-in-time) control vector instead of the
+    // per-frame layer condition; film_condition_size is its width. Only input_mixin_pre_film's *input* stays
+    // condition_size (it modulates the layer condition itself, which is still the time-varying audio).
+    const int film_cond_dim = params.film_condition_size.value_or(params.condition_size);
     if (params.layer1x1_params.active)
     {
       _layer1x1 = std::make_unique<Conv1x1>(params.bottleneck, params.channels, true, params.layer1x1_params.groups);
@@ -100,23 +105,25 @@ public:
         _activation, activations::Activation::get_activation(params.secondary_activation_config), params.bottleneck);
     }
 
-    // Initialize FiLM objects
+    // Initialize FiLM objects. Condition width is film_cond_dim (the control vector) when FiLM-controlled,
+    // else condition_size (the per-frame layer condition) -- today's behavior.
     if (params.conv_pre_film_params.active)
     {
       _conv_pre_film = std::make_unique<FiLM>(
-        params.condition_size, params.channels, params.conv_pre_film_params.shift, params.conv_pre_film_params.groups);
+        film_cond_dim, params.channels, params.conv_pre_film_params.shift, params.conv_pre_film_params.groups);
     }
     if (params.conv_post_film_params.active)
     {
       const int conv_out_channels =
         (params.gating_mode != GatingMode::NONE) ? 2 * params.bottleneck : params.bottleneck;
-      _conv_post_film = std::make_unique<FiLM>(params.condition_size, conv_out_channels,
-                                               params.conv_post_film_params.shift, params.conv_post_film_params.groups);
+      _conv_post_film = std::make_unique<FiLM>(
+        film_cond_dim, conv_out_channels, params.conv_post_film_params.shift, params.conv_post_film_params.groups);
     }
     if (params.input_mixin_pre_film_params.active)
     {
+      // input_dim stays condition_size: this FiLM modulates the layer condition (the audio) itself.
       _input_mixin_pre_film =
-        std::make_unique<FiLM>(params.condition_size, params.condition_size, params.input_mixin_pre_film_params.shift,
+        std::make_unique<FiLM>(film_cond_dim, params.condition_size, params.input_mixin_pre_film_params.shift,
                                params.input_mixin_pre_film_params.groups);
     }
     if (params.input_mixin_post_film_params.active)
@@ -124,33 +131,32 @@ public:
       const int input_mixin_out_channels =
         (params.gating_mode != GatingMode::NONE) ? 2 * params.bottleneck : params.bottleneck;
       _input_mixin_post_film =
-        std::make_unique<FiLM>(params.condition_size, input_mixin_out_channels,
-                               params.input_mixin_post_film_params.shift, params.input_mixin_post_film_params.groups);
+        std::make_unique<FiLM>(film_cond_dim, input_mixin_out_channels, params.input_mixin_post_film_params.shift,
+                               params.input_mixin_post_film_params.groups);
     }
     if (params.activation_pre_film_params.active)
     {
       const int z_channels = (params.gating_mode != GatingMode::NONE) ? 2 * params.bottleneck : params.bottleneck;
-      _activation_pre_film =
-        std::make_unique<FiLM>(params.condition_size, z_channels, params.activation_pre_film_params.shift,
-                               params.activation_pre_film_params.groups);
+      _activation_pre_film = std::make_unique<FiLM>(
+        film_cond_dim, z_channels, params.activation_pre_film_params.shift, params.activation_pre_film_params.groups);
     }
     if (params.activation_post_film_params.active)
     {
       _activation_post_film =
-        std::make_unique<FiLM>(params.condition_size, params.bottleneck, params.activation_post_film_params.shift,
+        std::make_unique<FiLM>(film_cond_dim, params.bottleneck, params.activation_post_film_params.shift,
                                params.activation_post_film_params.groups);
     }
     if (params._layer1x1_post_film_params.active && params.layer1x1_params.active)
     {
       _layer1x1_post_film =
-        std::make_unique<FiLM>(params.condition_size, params.channels, params._layer1x1_post_film_params.shift,
+        std::make_unique<FiLM>(film_cond_dim, params.channels, params._layer1x1_post_film_params.shift,
                                params._layer1x1_post_film_params.groups);
     }
     if (params.head1x1_post_film_params.active && params.head1x1_params.active)
     {
       _head1x1_post_film =
-        std::make_unique<FiLM>(params.condition_size, params.head1x1_params.out_channels,
-                               params.head1x1_post_film_params.shift, params.head1x1_post_film_params.groups);
+        std::make_unique<FiLM>(film_cond_dim, params.head1x1_params.out_channels, params.head1x1_post_film_params.shift,
+                               params.head1x1_post_film_params.groups);
     }
   };
 
@@ -179,6 +185,14 @@ public:
   /// Outputs are stored internally and accessible via GetOutputNextLayer() and GetOutputHead().
   /// Only the first num_frames columns of the output buffers are valid.
   void Process(const Eigen::MatrixXf& input, const Eigen::MatrixXf& condition, const int num_frames);
+
+  /// \brief Cache the control condition for this layer's FiLM modules
+  ///
+  /// No-op unless this layer was constructed with film_condition_size set. Call once per
+  /// processing block, before Process() -- not once per frame, and not only on control changes;
+  /// see FiLM::SetControlCondition() for why the cache does not outlive a buffer-size change.
+  /// \param control Control vector (film_condition_size x 1)
+  void SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control);
 
   /// \brief Get the number of channels expected as input/output from this layer
   /// \return Number of channels
@@ -244,6 +258,7 @@ private:
   const GatingMode _gating_mode;
   const int _bottleneck; // Internal channel count (not doubled when gated)
   bool _skip_head_copy = false; // When true, GetOutputHead() returns _z directly (no head1x1, no gating)
+  const bool _film_controlled; // When true, FiLM reads the cached control condition instead of the layer condition
 
   // Gating/blending activation objects
   std::unique_ptr<gating_activations::GatingActivation> _gating_activation;
@@ -301,6 +316,13 @@ public:
   /// \param num_frames Number of frames to process
   void Process(const Eigen::MatrixXf& layer_inputs, const Eigen::MatrixXf& condition,
                const Eigen::MatrixXf& head_inputs, const int num_frames);
+
+  /// \brief Cache the control condition for every FiLM-controlled layer in this array
+  ///
+  /// No-op for layers that aren't FiLM-controlled. Call once per processing block, before
+  /// Process(); see Layer::SetFiLMCondition().
+  /// \param control Control vector (film_condition_size x 1)
+  void SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control);
 
   /// \brief Get output from last layer (for next layer array)
   ///

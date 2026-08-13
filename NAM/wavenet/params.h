@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -116,6 +117,8 @@ struct LayerParams
   /// \param activation_post_film_params_ FiLM parameters after the activation output before the layer1x1 convolution
   /// \param _layer1x1_post_film_params_ FiLM parameters after the layer1x1 convolution
   /// \param head1x1_post_film_params_ FiLM parameters after the head1x1 convolution
+  /// \param film_condition_size_ When present, every FiLM in this layer reads a control vector cached via
+  /// Layer::SetFiLMCondition() instead of the per-frame layer condition, and this is that control vector's width.
   LayerParams(const int condition_size_, const int channels_, const int bottleneck_, const int kernel_size_,
               const int dilation_, const activations::ActivationConfig& activation_config_,
               const GatingMode gating_mode_, const int groups_input_, const int groups_input_mixin_,
@@ -124,7 +127,8 @@ struct LayerParams
               const _FiLMParams& conv_pre_film_params_, const _FiLMParams& conv_post_film_params_,
               const _FiLMParams& input_mixin_pre_film_params_, const _FiLMParams& input_mixin_post_film_params_,
               const _FiLMParams& activation_pre_film_params_, const _FiLMParams& activation_post_film_params_,
-              const _FiLMParams& _layer1x1_post_film_params_, const _FiLMParams& head1x1_post_film_params_)
+              const _FiLMParams& _layer1x1_post_film_params_, const _FiLMParams& head1x1_post_film_params_,
+              const std::optional<int>& film_condition_size_ = std::nullopt)
   : condition_size(condition_size_)
   , channels(channels_)
   , bottleneck(bottleneck_)
@@ -145,6 +149,7 @@ struct LayerParams
   , activation_post_film_params(activation_post_film_params_)
   , _layer1x1_post_film_params(_layer1x1_post_film_params_)
   , head1x1_post_film_params(head1x1_post_film_params_)
+  , film_condition_size(film_condition_size_)
   {
   }
 
@@ -168,6 +173,7 @@ struct LayerParams
   const _FiLMParams activation_post_film_params; ///< FiLM parameters after activation
   const _FiLMParams _layer1x1_post_film_params; ///< FiLM parameters after the layer1x1 convolution (layer1x1_post_film)
   const _FiLMParams head1x1_post_film_params; ///< FiLM parameters after the head1x1 convolution
+  const std::optional<int> film_condition_size; ///< Width of the cached FiLM control condition, if FiLM-controlled
 };
 
 /// \brief Parameters for constructing a LayerArray
@@ -203,11 +209,13 @@ public:
   /// \param activation_post_film_params_ FiLM parameters after activation
   /// \param _layer1x1_post_film_params_ FiLM parameters after layer1x1 convolutions
   /// \param head1x1_post_film_params_ FiLM parameters after head1x1 convolutions
+  /// \param film_condition_size_ When present, every FiLM in this layer array reads a control vector of this
+  /// width, cached via LayerArray::SetFiLMCondition(), instead of the per-frame layer condition.
   /// \throws std::invalid_argument If dilations, activation_configs, gating_modes, or secondary_activation_configs
   /// sizes don't match
-  LayerArrayParams(const int input_size_, const int condition_size_, const int head_size_, const int head_dilation_, const int head_kernel_size_,
-                   const int channels_, const int bottleneck_, const std::vector<int>&& kernel_sizes_,
-                   const std::vector<int>&& dilations_,
+  LayerArrayParams(const int input_size_, const int condition_size_, const int head_size_, const int head_dilation_,
+                   const int head_kernel_size_, const int channels_, const int bottleneck_,
+                   const std::vector<int>&& kernel_sizes_, const std::vector<int>&& dilations_,
                    const std::vector<activations::ActivationConfig>&& activation_configs_,
                    const std::vector<GatingMode>&& gating_modes_, const bool head_bias_, const int groups_input,
                    const int groups_input_mixin_, const Layer1x1Params& layer1x1_params_,
@@ -216,7 +224,8 @@ public:
                    const _FiLMParams& conv_pre_film_params_, const _FiLMParams& conv_post_film_params_,
                    const _FiLMParams& input_mixin_pre_film_params_, const _FiLMParams& input_mixin_post_film_params_,
                    const _FiLMParams& activation_pre_film_params_, const _FiLMParams& activation_post_film_params_,
-                   const _FiLMParams& _layer1x1_post_film_params_, const _FiLMParams& head1x1_post_film_params_)
+                   const _FiLMParams& _layer1x1_post_film_params_, const _FiLMParams& head1x1_post_film_params_,
+                   const std::optional<int>& film_condition_size_ = std::nullopt)
   : input_size(input_size_)
   , condition_size(condition_size_)
   , head_size(head_size_)
@@ -242,6 +251,7 @@ public:
   , activation_post_film_params(activation_post_film_params_)
   , _layer1x1_post_film_params(_layer1x1_post_film_params_)
   , head1x1_post_film_params(head1x1_post_film_params_)
+  , film_condition_size(film_condition_size_)
   {
     if (head_kernel_size < 1)
     {
@@ -302,6 +312,7 @@ public:
   const _FiLMParams activation_post_film_params; ///< FiLM params after activation
   const _FiLMParams _layer1x1_post_film_params; ///< FiLM params after layer1x1 conv
   const _FiLMParams head1x1_post_film_params; ///< FiLM params after head1x1 conv
+  const std::optional<int> film_condition_size; ///< Width of the cached FiLM control condition, if FiLM-controlled
 };
 
 /// \brief Parameters for the optional post-stack head (matches Python ``nam.models.wavenet._head.Head``).

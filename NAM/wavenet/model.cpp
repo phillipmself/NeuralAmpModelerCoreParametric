@@ -171,8 +171,11 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
   // Step 1: input convolutions
   if (this->_conv_pre_film)
   {
-    // Use Process() instead of Process_() since input is const
-    this->_conv_pre_film->Process(input, condition, num_frames);
+    // Use Process()/ProcessCached() instead of the in-place variants since input is const
+    if (this->_film_controlled)
+      this->_conv_pre_film->ProcessCached(input, num_frames);
+    else
+      this->_conv_pre_film->Process(input, condition, num_frames);
     this->_conv.Process(this->_conv_pre_film->GetOutput(), num_frames);
   }
   else
@@ -182,13 +185,20 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
   if (this->_conv_post_film)
   {
     Eigen::MatrixXf& conv_output = this->_conv.GetOutput();
-    this->_conv_post_film->Process_(conv_output, condition, num_frames);
+    if (this->_film_controlled)
+      this->_conv_post_film->ProcessCached_(conv_output, num_frames);
+    else
+      this->_conv_post_film->Process_(conv_output, condition, num_frames);
   }
 
   if (this->_input_mixin_pre_film)
   {
-    // Use Process() instead of Process_() since condition is const
-    this->_input_mixin_pre_film->Process(condition, condition, num_frames);
+    // input_mixin_pre_film modulates the layer condition itself; FiLM's condition (when film-controlled)
+    // is the cached control, not `condition`.
+    if (this->_film_controlled)
+      this->_input_mixin_pre_film->ProcessCached(condition, num_frames);
+    else
+      this->_input_mixin_pre_film->Process(condition, condition, num_frames);
     this->_input_mixin.process_(this->_input_mixin_pre_film->GetOutput(), num_frames);
   }
   else
@@ -198,14 +208,20 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
   if (this->_input_mixin_post_film)
   {
     Eigen::MatrixXf& input_mixin_output = this->_input_mixin.GetOutput();
-    this->_input_mixin_post_film->Process_(input_mixin_output, condition, num_frames);
+    if (this->_film_controlled)
+      this->_input_mixin_post_film->ProcessCached_(input_mixin_output, num_frames);
+    else
+      this->_input_mixin_post_film->Process_(input_mixin_output, condition, num_frames);
   }
   this->_z.leftCols(num_frames).noalias() =
     _conv.GetOutput().leftCols(num_frames) + _input_mixin.GetOutput().leftCols(num_frames);
 
   if (this->_activation_pre_film)
   {
-    this->_activation_pre_film->Process_(this->_z, condition, num_frames);
+    if (this->_film_controlled)
+      this->_activation_pre_film->ProcessCached_(this->_z, num_frames);
+    else
+      this->_activation_pre_film->Process_(this->_z, condition, num_frames);
   }
 
   // Step 2 & 3: activation and 1x1
@@ -219,7 +235,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
     this->_activation->apply(this->_z.leftCols(num_frames));
     if (this->_activation_post_film)
     {
-      this->_activation_post_film->Process_(this->_z, condition, num_frames);
+      if (this->_film_controlled)
+        this->_activation_post_film->ProcessCached_(this->_z, num_frames);
+      else
+        this->_activation_post_film->Process_(this->_z, condition, num_frames);
     }
     if (this->_layer1x1)
     {
@@ -227,7 +246,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
       if (this->_layer1x1_post_film)
       {
         Eigen::MatrixXf& layer1x1_output = this->_layer1x1->GetOutput();
-        this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
+        if (this->_film_controlled)
+          this->_layer1x1_post_film->ProcessCached_(layer1x1_output, num_frames);
+        else
+          this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
       }
     }
   }
@@ -240,8 +262,11 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
     this->_gating_activation->apply(input_block, output_block);
     if (this->_activation_post_film)
     {
-      // Use Process() for blocks and copy result back
-      this->_activation_post_film->Process(this->_z.topRows(bottleneck), condition, num_frames);
+      // Use Process()/ProcessCached() for blocks and copy result back
+      if (this->_film_controlled)
+        this->_activation_post_film->ProcessCached(this->_z.topRows(bottleneck), num_frames);
+      else
+        this->_activation_post_film->Process(this->_z.topRows(bottleneck), condition, num_frames);
       this->_z.topRows(bottleneck).leftCols(num_frames).noalias() =
         this->_activation_post_film->GetOutput().leftCols(num_frames);
     }
@@ -251,7 +276,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
       if (this->_layer1x1_post_film)
       {
         Eigen::MatrixXf& layer1x1_output = this->_layer1x1->GetOutput();
-        this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
+        if (this->_film_controlled)
+          this->_layer1x1_post_film->ProcessCached_(layer1x1_output, num_frames);
+        else
+          this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
       }
     }
   }
@@ -264,8 +292,11 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
     this->_blending_activation->apply(input_block, output_block);
     if (this->_activation_post_film)
     {
-      // Use Process() for blocks and copy result back
-      this->_activation_post_film->Process(this->_z.topRows(bottleneck), condition, num_frames);
+      // Use Process()/ProcessCached() for blocks and copy result back
+      if (this->_film_controlled)
+        this->_activation_post_film->ProcessCached(this->_z.topRows(bottleneck), num_frames);
+      else
+        this->_activation_post_film->Process(this->_z.topRows(bottleneck), condition, num_frames);
       this->_z.topRows(bottleneck).leftCols(num_frames).noalias() =
         this->_activation_post_film->GetOutput().leftCols(num_frames);
     }
@@ -275,7 +306,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
       if (this->_layer1x1_post_film)
       {
         Eigen::MatrixXf& layer1x1_output = this->_layer1x1->GetOutput();
-        this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
+        if (this->_film_controlled)
+          this->_layer1x1_post_film->ProcessCached_(layer1x1_output, num_frames);
+        else
+          this->_layer1x1_post_film->Process_(layer1x1_output, condition, num_frames);
       }
     }
   }
@@ -293,7 +327,10 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
     if (this->_head1x1_post_film)
     {
       Eigen::MatrixXf& head1x1_output = this->_head1x1->GetOutput();
-      this->_head1x1_post_film->Process_(head1x1_output, condition, num_frames);
+      if (this->_film_controlled)
+        this->_head1x1_post_film->ProcessCached_(head1x1_output, num_frames);
+      else
+        this->_head1x1_post_film->Process_(head1x1_output, condition, num_frames);
     }
 #ifdef NAM_USE_INLINE_GEMM
     {
@@ -385,6 +422,28 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
   }
 }
 
+void nam::wavenet::detail::Layer::SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+{
+  if (!this->_film_controlled)
+    return;
+  if (this->_conv_pre_film)
+    this->_conv_pre_film->SetControlCondition(control);
+  if (this->_conv_post_film)
+    this->_conv_post_film->SetControlCondition(control);
+  if (this->_input_mixin_pre_film)
+    this->_input_mixin_pre_film->SetControlCondition(control);
+  if (this->_input_mixin_post_film)
+    this->_input_mixin_post_film->SetControlCondition(control);
+  if (this->_activation_pre_film)
+    this->_activation_pre_film->SetControlCondition(control);
+  if (this->_activation_post_film)
+    this->_activation_post_film->SetControlCondition(control);
+  if (this->_layer1x1_post_film)
+    this->_layer1x1_post_film->SetControlCondition(control);
+  if (this->_head1x1_post_film)
+    this->_head1x1_post_film->SetControlCondition(control);
+}
+
 // LayerArray =================================================================
 
 nam::wavenet::detail::LayerArray::LayerArray(const LayerArrayParams& params)
@@ -403,9 +462,15 @@ nam::wavenet::detail::LayerArray::LayerArray(const LayerArrayParams& params)
       params.layer1x1_params, params.head1x1_params, params.secondary_activation_configs[i],
       params.conv_pre_film_params, params.conv_post_film_params, params.input_mixin_pre_film_params,
       params.input_mixin_post_film_params, params.activation_pre_film_params, params.activation_post_film_params,
-      params._layer1x1_post_film_params, params.head1x1_post_film_params);
+      params._layer1x1_post_film_params, params.head1x1_post_film_params, params.film_condition_size);
     this->_layers.push_back(Layer(layer_params));
   }
+}
+
+void nam::wavenet::detail::LayerArray::SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+{
+  for (auto& layer : this->_layers)
+    layer.SetFiLMCondition(control);
 }
 
 void nam::wavenet::detail::LayerArray::SetMaxBufferSize(const int maxBufferSize)
@@ -628,6 +693,12 @@ nam::wavenet::WaveNet::WaveNet(const int in_channels,
     mPrewarmSamples += this->_layer_arrays[i].get_receptive_field();
   if (this->_post_stack_head != nullptr)
     mPrewarmSamples += this->_post_stack_head->receptive_field() - 1;
+}
+
+void nam::wavenet::WaveNet::SetParamCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+{
+  for (size_t i = 0; i < this->_layer_arrays.size(); i++)
+    this->_layer_arrays[i].SetFiLMCondition(control);
 }
 
 void nam::wavenet::WaveNet::set_weights_(std::vector<float>& weights)
@@ -1160,12 +1231,22 @@ nam::wavenet::WaveNetConfig nam::wavenet::parse_config_json(const nlohmann::json
                                + ": layer1x1_post_film cannot be active when layer1x1.active is false");
     }
 
+    // Presence (not just value) of film_condition_size switches every FiLM in this layer array from the
+    // per-frame layer condition to a cached, constant-in-time control condition of this width.
+    std::optional<int> film_condition_size;
+    if (layer_config.find("film_condition_size") != layer_config.end()
+        && !layer_config["film_condition_size"].is_null())
+    {
+      film_condition_size = layer_config["film_condition_size"].get<int>();
+    }
+
     wc.layer_array_params.push_back(nam::wavenet::LayerArrayParams(
-      input_size, condition_size, head_size, head_dilation, head_kernel_size, channels, bottleneck, std::move(kernel_sizes), dilations,
-      std::move(activation_configs), std::move(gating_modes), head_bias, groups, groups_input_mixin, layer1x1_params,
-      head1x1_params, std::move(secondary_activation_configs), conv_pre_film_params, conv_post_film_params,
-      input_mixin_pre_film_params, input_mixin_post_film_params, activation_pre_film_params,
-      activation_post_film_params, _layer1x1_post_film_params, head1x1_post_film_params));
+      input_size, condition_size, head_size, head_dilation, head_kernel_size, channels, bottleneck,
+      std::move(kernel_sizes), dilations, std::move(activation_configs), std::move(gating_modes), head_bias, groups,
+      groups_input_mixin, layer1x1_params, head1x1_params, std::move(secondary_activation_configs),
+      conv_pre_film_params, conv_post_film_params, input_mixin_pre_film_params, input_mixin_post_film_params,
+      activation_pre_film_params, activation_post_film_params, _layer1x1_post_film_params, head1x1_post_film_params,
+      film_condition_size));
   }
 
   wc.with_head = config.find("head") != config.end() && !config["head"].is_null();

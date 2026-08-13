@@ -68,6 +68,18 @@ public:
   /// \param weights Iterator to the weights vector. Will be advanced as weights are consumed.
   void set_weights_(std::vector<float>::iterator& weights);
 
+  /// \brief Cache the control condition for every FiLM-controlled layer array
+  ///
+  /// Fans out to LayerArray::SetFiLMCondition() on every layer array; a no-op for those that
+  /// aren't FiLM-controlled (see LayerArrayParams::film_condition_size).
+  ///
+  /// Call once per processing block, before process(), rather than once per frame -- the per-frame
+  /// cost is then just the FiLM fused multiply-add against this cached column. It must NOT be
+  /// hoisted to only-on-control-change: SetMaxBufferSize() resizes the buffers the columns are
+  /// cached in. FiLMWaveNet::process() is the reference caller.
+  /// \param control Control vector (film_condition_size x 1)
+  void SetParamCondition(const Eigen::Ref<const Eigen::MatrixXf>& control);
+
   int GetPrewarmSamples() override { return mPrewarmSamples; };
 
 protected:

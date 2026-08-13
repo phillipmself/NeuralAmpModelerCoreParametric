@@ -203,6 +203,72 @@ public:
     input.leftCols(num_frames).noalias() = _output.leftCols(num_frames);
   }
 
+  /// \brief Cache scale/shift from a condition that is constant across the block
+  ///
+  /// Runs the Conv1x1(condition) computation once, for a single-column control vector,
+  /// instead of the once-per-``Process()``-call recomputation that a time-varying condition
+  /// requires. ProcessCached()/ProcessCached_() then reuse the cached column for every frame.
+  ///
+  /// Call this once per processing block, before the ProcessCached() calls that consume it --
+  /// not once per frame, and not only when the control changes: SetMaxBufferSize() resizes the
+  /// buffer this caches into, so a cache written before a buffer-size change does not survive it.
+  /// \param control Control vector (condition_dim x 1)
+  void SetControlCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+  {
+    assert(get_condition_dim() == control.rows());
+    assert(control.cols() >= 1);
+    _cond_to_scale_shift.process_(control, 1);
+  }
+
+  /// \brief Apply the scale/shift cached by SetControlCondition(), broadcasting it across num_frames
+  ///
+  /// Writes (input_dim x num_frames) into internal output buffer; access via GetOutput().
+  /// \param input Input matrix (input_dim x num_frames)
+  /// \param num_frames Number of frames to process
+  void ProcessCached(const Eigen::Ref<const Eigen::MatrixXf>& input, const int num_frames)
+  {
+    assert(get_input_dim() == input.rows());
+    assert(num_frames <= input.cols());
+    assert(num_frames <= _output.cols());
+
+    const int input_dim = (int)get_input_dim();
+    const float* NAM_RESTRICT scale_ptr = _cond_to_scale_shift.GetOutput().data(); // cached column 0
+    const float* NAM_RESTRICT input_ptr = input.data();
+    const int input_stride = (int)input.outerStride();
+    float* NAM_RESTRICT output_ptr = _output.data();
+
+    if (_do_shift)
+    {
+      const float* NAM_RESTRICT shift_ptr = scale_ptr + input_dim;
+      for (int f = 0; f < num_frames; f++)
+      {
+        const float* NAM_RESTRICT in_col = input_ptr + f * input_stride;
+        float* NAM_RESTRICT out_col = output_ptr + f * input_dim;
+        for (int i = 0; i < input_dim; i++)
+          out_col[i] = in_col[i] * scale_ptr[i] + shift_ptr[i];
+      }
+    }
+    else
+    {
+      for (int f = 0; f < num_frames; f++)
+      {
+        const float* NAM_RESTRICT in_col = input_ptr + f * input_stride;
+        float* NAM_RESTRICT out_col = output_ptr + f * input_dim;
+        for (int i = 0; i < input_dim; i++)
+          out_col[i] = in_col[i] * scale_ptr[i];
+      }
+    }
+  }
+
+  /// \brief Apply the cached scale/shift in-place (see ProcessCached())
+  /// \param input Input matrix (input_dim x num_frames), will be modified in-place
+  /// \param num_frames Number of frames to process
+  void ProcessCached_(Eigen::Ref<Eigen::MatrixXf> input, const int num_frames)
+  {
+    ProcessCached(input, num_frames);
+    input.leftCols(num_frames).noalias() = _output.leftCols(num_frames);
+  }
+
 private:
   Conv1x1 _cond_to_scale_shift; // condition_dim -> (shift ? 2 : 1) * input_dim
   Eigen::MatrixXf _output; // input_dim x maxBufferSize

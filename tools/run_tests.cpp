@@ -11,6 +11,8 @@
 #include "test/test_dsp.cpp"
 #include "test/test_film.cpp"
 #include "test/test_film_realtime_safe.cpp"
+#include "test/test_film_wavenet.cpp"
+#include "test/test_film_wavenet_parity.cpp"
 #include "test/test_fast_lut.cpp"
 #include "test/test_get_dsp.cpp"
 #include "test/test_hypernet.cpp"
@@ -128,6 +130,19 @@ int main()
   test_concat_wavenet_parity::test_matches_python_golden();
   test_concat_wavenet_parity::test_matches_manual_concat_wavenet_real_weights();
   test_concat_wavenet_parity::test_setparams_process_no_allocation_real_model();
+
+  test_film_wavenet::test_load_and_select_continuous();
+  test_film_wavenet::test_switch_one_hot_encoding();
+  test_film_wavenet::test_param_encoder_weight_offset();
+  test_film_wavenet::test_unsupported_param_encoder_activation_throws();
+  test_film_wavenet::test_parser_validation();
+  test_film_wavenet::test_setparams_and_process_realtime_safe();
+  test_film_wavenet_parity::test_matches_python_golden_no_encoder();
+  test_film_wavenet_parity::test_matches_python_golden_with_encoder();
+  test_film_wavenet_parity::test_setparams_process_no_allocation_no_encoder();
+  test_film_wavenet_parity::test_setparams_process_no_allocation_with_encoder();
+  test_film_wavenet_parity::test_block_size_invariance();
+  test_film_wavenet_parity::test_control_move_settles_within_the_receptive_field();
 
   test_param_ramp::test_snap_is_immediate();
   test_param_ramp::test_lands_exactly_on_target();
