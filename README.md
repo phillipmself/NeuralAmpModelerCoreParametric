@@ -5,9 +5,10 @@
 Core C++ DSP library for NAM plugins.
 
 This is a fork of [NeuralAmpModelerCore](https://github.com/sdatkinson/NeuralAmpModelerCore) that adds
-runtime support for **parametric** models (`HyperWaveNet` / `ConcatWaveNet`) — WaveNet architectures
-whose weights are conditioned at runtime by a hypernetwork or concatenated control inputs, enabling
-continuous, knob-controllable parameters on a loaded `.nam` model.
+runtime support for **parametric** models (`HyperWaveNet`, `ConcatWaveNet`, `ConcatLSTM`) — architectures
+conditioned at runtime by a hypernetwork that generates their weights, or by control values concatenated
+onto the audio as extra input channels, enabling continuous, knob-controllable parameters on a loaded
+`.nam` model.
 
 For an example of how to use, see [NamParametricPlugin](https://github.com/phillipmself/NamParametricPlugin),
 since the upstream [NeuralAmpModelerPlugin](https://github.com/sdatkinson/NeuralAmpModelerPlugin) cannot load
