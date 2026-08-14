@@ -37,7 +37,7 @@ public:
     _control_cached = Eigen::VectorXf::Zero(condition_dim);
     _scale_shift_current = Eigen::VectorXf::Zero(scale_shift_dim);
     _scale_shift_target = Eigen::VectorXf::Zero(scale_shift_dim);
-    _scale_shift_step = Eigen::VectorXf::Zero(scale_shift_dim);
+    _scale_shift_delta = Eigen::VectorXf::Zero(scale_shift_dim);
   }
 
   /// \brief Get the entire internal output buffer
@@ -249,11 +249,17 @@ public:
     if (!_have_control || ramp_samples <= 0)
     {
       _scale_shift_current = _scale_shift_target;
+      _scale_shift_delta.setZero();
       _ramp_remaining = 0;
     }
     else
     {
-      _scale_shift_step = (_scale_shift_target - _scale_shift_current) / (float)ramp_samples;
+      // Held as an offset from the destination rather than a per-sample increment, so the
+      // ramp can be evaluated from its integer position instead of accumulated and cannot
+      // drift away from the target over a long gesture. Re-arming mid-flight starts from
+      // wherever the ramp currently is, which keeps the applied value continuous.
+      _scale_shift_delta = _scale_shift_current - _scale_shift_target;
+      _ramp_inv_total = 1.0f / (float)ramp_samples;
       _ramp_remaining = ramp_samples;
     }
     _have_control = true;
@@ -284,10 +290,19 @@ public:
     if (ramped > 0)
     {
       float* NAM_RESTRICT cur_ptr = _scale_shift_current.data();
-      const float* NAM_RESTRICT step_ptr = _scale_shift_step.data();
+      const float* NAM_RESTRICT tgt_ptr = _scale_shift_target.data();
+      const float* NAM_RESTRICT delta_ptr = _scale_shift_delta.data();
       const int scale_shift_dim = (int)_scale_shift_current.size();
       for (int f = 0; f < ramped; f++)
       {
+        // Position comes from the integer sample counter rather than a running sum. An
+        // accumulated ramp lands wherever its rounding error has taken it, and the
+        // correcting step to the committed target is then a jump: over a 1 s ramp that was
+        // ~1.9e-4, larger than any step the ramp itself takes, and audible as a click at
+        // the instant the knob's move completes.
+        const float frac = (float)(_ramp_remaining - f) * _ramp_inv_total;
+        for (int i = 0; i < scale_shift_dim; i++)
+          cur_ptr[i] = tgt_ptr[i] + delta_ptr[i] * frac;
         const float* NAM_RESTRICT in_col = input_ptr + f * input_stride;
         float* NAM_RESTRICT out_col = output_ptr + f * input_dim;
         if (_do_shift)
@@ -301,14 +316,15 @@ public:
           for (int i = 0; i < input_dim; i++)
             out_col[i] = in_col[i] * cur_ptr[i];
         }
-        for (int i = 0; i < scale_shift_dim; i++)
-          cur_ptr[i] += step_ptr[i];
       }
       _ramp_remaining -= ramped;
-      // Land on the committed value exactly rather than on the accumulated one, so the settled
-      // state carries no residual from the ramp.
-      if (_ramp_remaining == 0)
-        _scale_shift_current = _scale_shift_target;
+      // Leave _scale_shift_current holding what the *next* sample will apply, so a re-arm
+      // mid-flight is continuous. At _ramp_remaining == 0 the fraction is exactly zero, so
+      // this is the committed target -- the ramp lands by construction, with nothing to
+      // correct.
+      const float frac = (float)_ramp_remaining * _ramp_inv_total;
+      for (int i = 0; i < scale_shift_dim; i++)
+        cur_ptr[i] = tgt_ptr[i] + delta_ptr[i] * frac;
     }
 
     const float* NAM_RESTRICT scale_ptr = _scale_shift_target.data();
@@ -353,8 +369,9 @@ private:
   Eigen::VectorXf _control_cached; // condition_dim; the control that produced _scale_shift_target
   Eigen::VectorXf _scale_shift_current; // (shift ? 2 : 1) * input_dim; what the block is applying
   Eigen::VectorXf _scale_shift_target; // committed destination
-  Eigen::VectorXf _scale_shift_step; // per-sample increment while ramping
+  Eigen::VectorXf _scale_shift_delta; // (value when armed) - target, scaled by the ramp position
   int _ramp_remaining = 0;
+  float _ramp_inv_total = 0.0f;
   bool _have_control = false;
   Eigen::MatrixXf _output; // input_dim x maxBufferSize
   bool _do_shift;

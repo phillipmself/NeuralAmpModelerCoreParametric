@@ -229,6 +229,7 @@ int main()
   test_film::test_process_inplace_partial_frames();
   test_film::test_process_with_groups();
   test_film::test_process_with_groups_scale_only();
+  test_film::test_long_ramp_lands_without_a_step();
 
   test_film_realtime_safe::test_allocation_tracking_pass();
   test_film_realtime_safe::test_allocation_tracking_fail();

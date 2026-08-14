@@ -1,6 +1,7 @@
 // Tests for FiLM
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <vector>
@@ -477,4 +478,74 @@ void test_process_with_groups_scale_only()
     }
   }
 }
+// A control ramp must arrive at its destination the same way it travelled: the step it
+// takes on the sample it lands must be no bigger than the steps it has been taking all
+// along. Deriving the position from a running sum breaks that -- the sum drifts, and
+// correcting to the committed target on the final sample is a jump. Over a 1 s ramp that
+// jump measured ~1.9e-4 against a per-sample increment of ~3.9e-5, i.e. five times the
+// motion either side of it, which is a click exactly when a knob move finishes.
+void test_long_ramp_lands_without_a_step()
+{
+  constexpr int kCondDim = 8;
+  constexpr int kInputDim = 8;
+  constexpr int kBlock = 64;
+  constexpr int kRamp = 48000; // 1 s at 48 kHz, the shipped FiLMWaveNet default
+
+  nam::FiLM film(kCondDim, kInputDim, /*shift=*/false, /*groups=*/1);
+  film.SetMaxBufferSize(kBlock);
+  std::vector<float> weights;
+  weights.reserve(kCondDim * kInputDim + kInputDim);
+  for (int i = 0; i < kCondDim * kInputDim; i++)
+    weights.push_back(0.37f * std::sin(0.7f * (float)i) + 0.11f);
+  for (int i = 0; i < kInputDim; i++)
+    weights.push_back(0.5f + 0.01f * (float)i);
+  auto it = weights.begin();
+  film.set_weights_(it);
+
+  const Eigen::MatrixXf from = Eigen::MatrixXf::Constant(kCondDim, 1, -0.9f);
+  const Eigen::MatrixXf to = Eigen::MatrixXf::Constant(kCondDim, 1, 0.8f);
+  const Eigen::MatrixXf ones = Eigen::MatrixXf::Ones(kInputDim, kBlock);
+
+  film.SetControlCondition(from, 0); // settle, so the ramp starts from a known place
+  film.SetControlCondition(to, kRamp);
+
+  std::vector<float> steps;
+  steps.reserve(kRamp + kBlock);
+  float previous = 0.0f;
+  bool have_previous = false;
+  float settled = 0.0f;
+  for (int n = 0; n < kRamp + 4 * kBlock; n += kBlock)
+  {
+    film.ProcessCached(ones, kBlock);
+    const Eigen::MatrixXf& out = film.GetOutput();
+    for (int f = 0; f < kBlock; f++)
+    {
+      const float value = out(0, f);
+      if (have_previous)
+        steps.push_back(std::abs(value - previous));
+      previous = value;
+      have_previous = true;
+    }
+    settled = previous;
+  }
+
+  // The ramp must have finished, and finished exactly on the committed value.
+  assert(!film.IsRamping());
+  film.SetControlCondition(from, 0);
+  film.SetControlCondition(to, 0); // same destination, landed immediately
+  film.ProcessCached(ones, kBlock);
+  const float exact = film.GetOutput()(0, 0);
+  assert(std::abs(settled - exact) < 1.0e-7f);
+
+  // No sample is a jump: the largest step over the whole gesture is within a hair of the
+  // typical one. This is what fails if the ramp is accumulated and then snapped.
+  std::vector<float> sorted = steps;
+  std::sort(sorted.begin(), sorted.end());
+  const float largest = sorted.back();
+  // Median over the ramping portion; the settled tail contributes zeros at the front.
+  const float typical = sorted[sorted.size() - steps.size() / 4];
+  assert(typical > 0.0f);
+  assert(largest < 1.5f * typical);
+}
+
 } // namespace test_film
