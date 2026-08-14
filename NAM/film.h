@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include <Eigen/Dense>
 #include <cassert>
 #include <vector>
@@ -29,6 +31,13 @@ public:
   : _cond_to_scale_shift(condition_dim, (shift ? 2 : 1) * input_dim, /*bias=*/true, groups)
   , _do_shift(shift)
   {
+    // Sized here, never on the audio thread. These hold the cached-control path's state and are
+    // independent of the block size, so unlike _output they survive SetMaxBufferSize().
+    const int scale_shift_dim = (shift ? 2 : 1) * input_dim;
+    _control_cached = Eigen::VectorXf::Zero(condition_dim);
+    _scale_shift_current = Eigen::VectorXf::Zero(scale_shift_dim);
+    _scale_shift_target = Eigen::VectorXf::Zero(scale_shift_dim);
+    _scale_shift_step = Eigen::VectorXf::Zero(scale_shift_dim);
   }
 
   /// \brief Get the entire internal output buffer
@@ -209,16 +218,49 @@ public:
   /// instead of the once-per-``Process()``-call recomputation that a time-varying condition
   /// requires. ProcessCached()/ProcessCached_() then reuse the cached column for every frame.
   ///
-  /// Call this once per processing block, before the ProcessCached() calls that consume it --
-  /// not once per frame, and not only when the control changes: SetMaxBufferSize() resizes the
-  /// buffer this caches into, so a cache written before a buffer-size change does not survive it.
+  /// Idempotent: pushing an unchanged control is a no-op, so the natural place to call it is once
+  /// per processing block, before the ProcessCached() calls that consume it. The cached scale/shift
+  /// lives in members of this class rather than in a block-sized buffer, so it survives
+  /// SetMaxBufferSize(); what must NOT happen is re-arming the ramp on an unchanged target every
+  /// block, which would turn the linear ramp into a one-pole that never lands -- hence the
+  /// early-out below rather than a caller-side "did it change?" check.
   /// \param control Control vector (condition_dim x 1)
-  void SetControlCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+  /// \param ramp_samples Samples to slew over in scale/shift space; 0 lands immediately
+  void SetControlCondition(const Eigen::Ref<const Eigen::MatrixXf>& control, const int ramp_samples = 0)
   {
     assert(get_condition_dim() == control.rows());
     assert(control.cols() >= 1);
+    // Callers push every block so the cache cannot go stale, but re-arming an unchanged target
+    // every block would turn the linear ramp into a one-pole that never lands. Only an actual
+    // change re-aims it; otherwise the ramp in flight keeps running.
+    if (_have_control && (_control_cached.array() == control.col(0).array()).all())
+      return;
+    _control_cached = control.col(0);
+
     _cond_to_scale_shift.process_(control, 1);
+    const Eigen::MatrixXf& computed = _cond_to_scale_shift.GetOutput();
+    const int scale_shift_dim = (int)_scale_shift_target.size();
+    for (int i = 0; i < scale_shift_dim; i++)
+      _scale_shift_target[i] = computed(i, 0);
+
+    // Ramping from an unset state would slew up from zero (silence, then a swell) on the first
+    // block, so the first control of a stream always lands immediately -- as does an explicit
+    // ramp_samples of 0, which is how a reset settles.
+    if (!_have_control || ramp_samples <= 0)
+    {
+      _scale_shift_current = _scale_shift_target;
+      _ramp_remaining = 0;
+    }
+    else
+    {
+      _scale_shift_step = (_scale_shift_target - _scale_shift_current) / (float)ramp_samples;
+      _ramp_remaining = ramp_samples;
+    }
+    _have_control = true;
   }
+
+  /// \brief Whether a control ramp is still in flight (test/diagnostic aid)
+  bool IsRamping() const { return _ramp_remaining > 0; }
 
   /// \brief Apply the scale/shift cached by SetControlCondition(), broadcasting it across num_frames
   ///
@@ -232,15 +274,48 @@ public:
     assert(num_frames <= _output.cols());
 
     const int input_dim = (int)get_input_dim();
-    const float* NAM_RESTRICT scale_ptr = _cond_to_scale_shift.GetOutput().data(); // cached column 0
     const float* NAM_RESTRICT input_ptr = input.data();
     const int input_stride = (int)input.outerStride();
     float* NAM_RESTRICT output_ptr = _output.data();
 
+    // Settled: the committed scale/shift applies to the whole block, which is the common case and
+    // is bit-identical to what this did before ramping existed.
+    const int ramped = std::min(num_frames, _ramp_remaining);
+    if (ramped > 0)
+    {
+      float* NAM_RESTRICT cur_ptr = _scale_shift_current.data();
+      const float* NAM_RESTRICT step_ptr = _scale_shift_step.data();
+      const int scale_shift_dim = (int)_scale_shift_current.size();
+      for (int f = 0; f < ramped; f++)
+      {
+        const float* NAM_RESTRICT in_col = input_ptr + f * input_stride;
+        float* NAM_RESTRICT out_col = output_ptr + f * input_dim;
+        if (_do_shift)
+        {
+          const float* NAM_RESTRICT shift_ptr = cur_ptr + input_dim;
+          for (int i = 0; i < input_dim; i++)
+            out_col[i] = in_col[i] * cur_ptr[i] + shift_ptr[i];
+        }
+        else
+        {
+          for (int i = 0; i < input_dim; i++)
+            out_col[i] = in_col[i] * cur_ptr[i];
+        }
+        for (int i = 0; i < scale_shift_dim; i++)
+          cur_ptr[i] += step_ptr[i];
+      }
+      _ramp_remaining -= ramped;
+      // Land on the committed value exactly rather than on the accumulated one, so the settled
+      // state carries no residual from the ramp.
+      if (_ramp_remaining == 0)
+        _scale_shift_current = _scale_shift_target;
+    }
+
+    const float* NAM_RESTRICT scale_ptr = _scale_shift_target.data();
     if (_do_shift)
     {
       const float* NAM_RESTRICT shift_ptr = scale_ptr + input_dim;
-      for (int f = 0; f < num_frames; f++)
+      for (int f = ramped; f < num_frames; f++)
       {
         const float* NAM_RESTRICT in_col = input_ptr + f * input_stride;
         float* NAM_RESTRICT out_col = output_ptr + f * input_dim;
@@ -250,7 +325,7 @@ public:
     }
     else
     {
-      for (int f = 0; f < num_frames; f++)
+      for (int f = ramped; f < num_frames; f++)
       {
         const float* NAM_RESTRICT in_col = input_ptr + f * input_stride;
         float* NAM_RESTRICT out_col = output_ptr + f * input_dim;
@@ -271,6 +346,16 @@ public:
 
 private:
   Conv1x1 _cond_to_scale_shift; // condition_dim -> (shift ? 2 : 1) * input_dim
+  // Cached-control state. Ramping happens here, in scale/shift space, rather than on the control
+  // vector: the 1x1 still runs once per control change instead of once per frame, and the encoder
+  // upstream is never fed an interpolated control -- which is what keeps a switch's one-hot exact
+  // while its effect still arrives smoothly.
+  Eigen::VectorXf _control_cached; // condition_dim; the control that produced _scale_shift_target
+  Eigen::VectorXf _scale_shift_current; // (shift ? 2 : 1) * input_dim; what the block is applying
+  Eigen::VectorXf _scale_shift_target; // committed destination
+  Eigen::VectorXf _scale_shift_step; // per-sample increment while ramping
+  int _ramp_remaining = 0;
+  bool _have_control = false;
   Eigen::MatrixXf _output; // input_dim x maxBufferSize
   bool _do_shift;
 };

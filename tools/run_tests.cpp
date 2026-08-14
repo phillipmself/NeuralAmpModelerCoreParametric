@@ -136,6 +136,7 @@ int main()
   test_film_wavenet::test_param_encoder_weight_offset();
   test_film_wavenet::test_unsupported_param_encoder_activation_throws();
   test_film_wavenet::test_parser_validation();
+  test_film_wavenet::test_param_ramp_smooths_and_lands_exactly();
   test_film_wavenet::test_setparams_and_process_realtime_safe();
   test_film_wavenet_parity::test_matches_python_golden_no_encoder();
   test_film_wavenet_parity::test_matches_python_golden_with_encoder();

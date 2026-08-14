@@ -188,11 +188,12 @@ public:
 
   /// \brief Cache the control condition for this layer's FiLM modules
   ///
-  /// No-op unless this layer was constructed with film_condition_size set. Call once per
-  /// processing block, before Process() -- not once per frame, and not only on control changes;
-  /// see FiLM::SetControlCondition() for why the cache does not outlive a buffer-size change.
+  /// No-op unless this layer was constructed with film_condition_size set, and a no-op for an
+  /// unchanged control. Call once per processing block, before Process(); see
+  /// FiLM::SetControlCondition() for the ramp semantics.
   /// \param control Control vector (film_condition_size x 1)
-  void SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control);
+  /// \param ramp_samples Samples over which to slew to `control`; 0 lands immediately
+  void SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control, int ramp_samples);
 
   /// \brief Get the number of channels expected as input/output from this layer
   /// \return Number of channels
@@ -322,7 +323,8 @@ public:
   /// No-op for layers that aren't FiLM-controlled. Call once per processing block, before
   /// Process(); see Layer::SetFiLMCondition().
   /// \param control Control vector (film_condition_size x 1)
-  void SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control);
+  /// \param ramp_samples Samples over which to slew to `control`; 0 lands immediately
+  void SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control, int ramp_samples);
 
   /// \brief Get output from last layer (for next layer array)
   ///

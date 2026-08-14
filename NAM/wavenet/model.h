@@ -74,11 +74,14 @@ public:
   /// aren't FiLM-controlled (see LayerArrayParams::film_condition_size).
   ///
   /// Call once per processing block, before process(), rather than once per frame -- the per-frame
-  /// cost is then just the FiLM fused multiply-add against this cached column. It must NOT be
-  /// hoisted to only-on-control-change: SetMaxBufferSize() resizes the buffers the columns are
-  /// cached in. FiLMWaveNet::process() is the reference caller.
+  /// cost is then just the FiLM fused multiply-add against the cached column (plus, while a ramp is
+  /// in flight, one add per channel). Pushing an unchanged control is a no-op, so calling it every
+  /// block costs a comparison and keeps the load/reset paths from needing their own push.
+  /// FiLMWaveNet::process() is the reference caller.
   /// \param control Control vector (film_condition_size x 1)
-  void SetParamCondition(const Eigen::Ref<const Eigen::MatrixXf>& control);
+  /// \param ramp_samples Samples over which each FiLM slews to `control` in scale/shift space;
+  /// 0 lands immediately, which is what a stream restart wants.
+  void SetParamCondition(const Eigen::Ref<const Eigen::MatrixXf>& control, int ramp_samples = 0);
 
   int GetPrewarmSamples() override { return mPrewarmSamples; };
 
@@ -127,7 +130,6 @@ private:
   Eigen::MatrixXf _scaled_head_scratch;
 
   int mPrewarmSamples = 0; // Pre-compute during initialization
-
 };
 
 /// \brief Configuration for a WaveNet model

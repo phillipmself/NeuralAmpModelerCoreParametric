@@ -82,6 +82,7 @@ FiLMWaveNet::FiLMWaveNet(std::unique_ptr<WaveNet> wavenet, std::vector<ParamSpec
 , _param_specs(std::move(param_specs))
 , _param_encoder(std::move(param_encoder))
 , _params(_param_specs.size())
+, _ramp_seconds(kDefaultFiLMRampSeconds)
 {
   if (_wavenet == nullptr)
     throw std::invalid_argument("FiLMWaveNet: inner WaveNet must not be null");
@@ -99,6 +100,21 @@ FiLMWaveNet::FiLMWaveNet(std::unique_ptr<WaveNet> wavenet, std::vector<ParamSpec
     _params[i] = _param_specs[i].defaultValue;
   _encode_params();
   _update_condition();
+  _update_ramp_samples();
+}
+
+void FiLMWaveNet::SetParamRampSeconds(const float seconds)
+{
+  _ramp_seconds = std::max(0.0f, seconds);
+  _update_ramp_samples();
+}
+
+void FiLMWaveNet::_update_ramp_samples()
+{
+  // The ramp runs inside the inner WaveNet, which always sees the model's own rate (the host's
+  // rate is resampled to it upstream), so it is that rate the length is measured against.
+  const auto rate = GetExpectedSampleRate();
+  _ramp_samples = rate > 0.0 ? static_cast<int>(rate * _ramp_seconds) : 0;
 }
 
 void FiLMWaveNet::SetParams(const std::span<const float> params)
@@ -194,13 +210,14 @@ void FiLMWaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num
   {
 #endif
     assert(num_frames <= mMaxBufferSize);
-    // Refreshed once per block, not once per frame: every FiLM in the inner WaveNet caches this
-    // column and reuses it for every frame in the call (see FiLM::SetControlCondition /
-    // ProcessCached). Do NOT move this into SetParams() -- SetMaxBufferSize() resizes the buffer
-    // holding the cached column, so a host block-size change would leave every FiLM reading stale
-    // memory until the next SetParams(). Refreshing per block is what makes that unobservable, and
-    // it costs one 1x1 over a single column per FiLM.
-    _wavenet->SetParamCondition(_condition);
+    // Pushed once per block, not once per frame: every FiLM caches the resulting scale/shift and
+    // reuses it across the call (see FiLM::SetControlCondition / ProcessCached). An unchanged
+    // control is a no-op there, so this costs a comparison per FiLM and the 1x1 runs only when the
+    // control actually moves. Pushing here rather than from SetParams() is what lets the ramp be
+    // driven by audio-thread progress, and keeps construction and Reset() from needing their own
+    // push.
+    _wavenet->SetParamCondition(_condition, _snap_next_condition ? 0 : _ramp_samples);
+    _snap_next_condition = false;
     _wavenet->process(input, output, num_frames);
 #ifndef NDEBUG
   }
@@ -219,6 +236,10 @@ void FiLMWaveNet::Reset(const double sampleRate, const int maxBufferSize)
   // with no SetParamCondition() call ahead of it, so every FiLM would read an unset cache. Suppress
   // it here and let DSP::Reset() below prewarm through FiLMWaveNet::process(), which sets the
   // condition first.
+  // A reset is a stream restart: the committed control applies immediately rather than being
+  // ramped into, so the prewarm below runs at it. Armed before DSP::Reset() because that is what
+  // drives the prewarm.
+  _snap_next_condition = true;
   const auto prewarm_on_reset = GetPrewarmOnReset();
   _wavenet->SetPrewarmOnReset(false);
   try
@@ -232,6 +253,7 @@ void FiLMWaveNet::Reset(const double sampleRate, const int maxBufferSize)
   }
   _wavenet->SetPrewarmOnReset(prewarm_on_reset);
   DSP::Reset(sampleRate, maxBufferSize);
+  _update_ramp_samples();
 }
 
 void FiLMWaveNet::SetPrewarmOnReset(const bool prewarmOnReset)

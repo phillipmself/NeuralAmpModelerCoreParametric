@@ -32,6 +32,7 @@
 
 #include "NAM/get_dsp.h"
 #include "NAM/parametric_control.h"
+#include "NAM/wavenet/film_wavenet.h"
 #include "allocation_tracking.h"
 
 namespace test_film_wavenet_parity
@@ -192,6 +193,11 @@ std::vector<NAM_SAMPLE> render_blocked(const std::string& basename, const std::v
   auto dsp = nam::get_dsp(std::filesystem::path(std::string(kFixtureDir) + basename + ".nam"));
   auto* control = dynamic_cast<nam::IParametricControl*>(dsp.get());
   assert(control != nullptr);
+  // Control smoothing is deliberately out of the picture here: these two tests measure properties
+  // of the architecture (how far a control change propagates, and that block size does not change
+  // the arithmetic), and a ramp would just superimpose its own settling time on both.
+  // tools/test/test_film_wavenet.cpp::test_param_ramp_smooths_and_lands_exactly covers the ramp.
+  dynamic_cast<nam::wavenet::FiLMWaveNet*>(dsp.get())->SetParamRampSeconds(0.0f);
   control->SetParams(start);
 
   const auto num_samples = static_cast<int>(input.size());

@@ -422,26 +422,27 @@ void nam::wavenet::detail::Layer::Process(const Eigen::MatrixXf& input, const Ei
   }
 }
 
-void nam::wavenet::detail::Layer::SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+void nam::wavenet::detail::Layer::SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control,
+                                                   const int ramp_samples)
 {
   if (!this->_film_controlled)
     return;
   if (this->_conv_pre_film)
-    this->_conv_pre_film->SetControlCondition(control);
+    this->_conv_pre_film->SetControlCondition(control, ramp_samples);
   if (this->_conv_post_film)
-    this->_conv_post_film->SetControlCondition(control);
+    this->_conv_post_film->SetControlCondition(control, ramp_samples);
   if (this->_input_mixin_pre_film)
-    this->_input_mixin_pre_film->SetControlCondition(control);
+    this->_input_mixin_pre_film->SetControlCondition(control, ramp_samples);
   if (this->_input_mixin_post_film)
-    this->_input_mixin_post_film->SetControlCondition(control);
+    this->_input_mixin_post_film->SetControlCondition(control, ramp_samples);
   if (this->_activation_pre_film)
-    this->_activation_pre_film->SetControlCondition(control);
+    this->_activation_pre_film->SetControlCondition(control, ramp_samples);
   if (this->_activation_post_film)
-    this->_activation_post_film->SetControlCondition(control);
+    this->_activation_post_film->SetControlCondition(control, ramp_samples);
   if (this->_layer1x1_post_film)
-    this->_layer1x1_post_film->SetControlCondition(control);
+    this->_layer1x1_post_film->SetControlCondition(control, ramp_samples);
   if (this->_head1x1_post_film)
-    this->_head1x1_post_film->SetControlCondition(control);
+    this->_head1x1_post_film->SetControlCondition(control, ramp_samples);
 }
 
 // LayerArray =================================================================
@@ -467,10 +468,11 @@ nam::wavenet::detail::LayerArray::LayerArray(const LayerArrayParams& params)
   }
 }
 
-void nam::wavenet::detail::LayerArray::SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+void nam::wavenet::detail::LayerArray::SetFiLMCondition(const Eigen::Ref<const Eigen::MatrixXf>& control,
+                                                        const int ramp_samples)
 {
   for (auto& layer : this->_layers)
-    layer.SetFiLMCondition(control);
+    layer.SetFiLMCondition(control, ramp_samples);
 }
 
 void nam::wavenet::detail::LayerArray::SetMaxBufferSize(const int maxBufferSize)
@@ -695,10 +697,10 @@ nam::wavenet::WaveNet::WaveNet(const int in_channels,
     mPrewarmSamples += this->_post_stack_head->receptive_field() - 1;
 }
 
-void nam::wavenet::WaveNet::SetParamCondition(const Eigen::Ref<const Eigen::MatrixXf>& control)
+void nam::wavenet::WaveNet::SetParamCondition(const Eigen::Ref<const Eigen::MatrixXf>& control, const int ramp_samples)
 {
   for (size_t i = 0; i < this->_layer_arrays.size(); i++)
-    this->_layer_arrays[i].SetFiLMCondition(control);
+    this->_layer_arrays[i].SetFiLMCondition(control, ramp_samples);
 }
 
 void nam::wavenet::WaveNet::set_weights_(std::vector<float>& weights)

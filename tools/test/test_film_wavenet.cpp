@@ -22,6 +22,7 @@
 #include "NAM/get_dsp.h"
 #include "NAM/model_config.h"
 #include "NAM/parametric_control.h"
+#include "NAM/wavenet/film_wavenet.h"
 #include "allocation_tracking.h"
 
 namespace test_film_wavenet
@@ -108,6 +109,16 @@ nlohmann::json model_json(const int selected_encoded_index = 0, const nlohmann::
   };
 }
 
+// These tests assert the exact value the FiLM condition takes for a given control, which is a
+// statement about the *encoding*. Control smoothing is a separate concern with its own test
+// below, so switch it off here rather than processing blocks until the ramp lands.
+void disable_param_ramp(nam::DSP& dsp)
+{
+  auto* film = dynamic_cast<nam::wavenet::FiLMWaveNet*>(&dsp);
+  assert(film != nullptr);
+  film->SetParamRampSeconds(0.0f);
+}
+
 std::vector<float> process(nam::DSP& dsp, const float input_value = 0.25f)
 {
   constexpr int frames = 8;
@@ -159,6 +170,7 @@ void test_load_and_select_continuous()
 
   dsp->SetPrewarmOnReset(false);
   dsp->Reset(48000.0, 16);
+  disable_param_ramp(*dsp);
   const auto nominal = process(*dsp);
   const auto expected_nominal = expected_gain_encoding(5.0f);
   for (const auto sample : nominal)
@@ -176,6 +188,7 @@ void test_switch_one_hot_encoding()
   auto dsp = nam::get_dsp(model_json(2));
   dsp->SetPrewarmOnReset(false);
   dsp->Reset(48000.0, 16);
+  disable_param_ramp(*dsp);
   auto* control = dynamic_cast<nam::IParametricControl*>(dsp.get());
   const auto crunch = process(*dsp); // default mode == 1 == crunch
   for (const auto sample : crunch)
@@ -208,6 +221,7 @@ void test_param_encoder_weight_offset()
   auto dsp = nam::get_dsp(model_json(0, encoder));
   dsp->SetPrewarmOnReset(false);
   dsp->Reset(48000.0, 16);
+  disable_param_ramp(*dsp);
   auto* control = dynamic_cast<nam::IParametricControl*>(dsp.get());
   control->SetParams(std::array<float, 2>{10.0f, 1.0f});
   const auto maximum = process(*dsp);
@@ -258,11 +272,78 @@ void test_parser_validation()
   assert_runtime_error([&]() { (void)nam::get_dsp(config); }, "at least one active FiLM");
 }
 
+// The synthetic model's output is the FiLM condition itself, so the rendered samples ARE the
+// applied control -- which makes the ramp directly observable. Without smoothing the control steps
+// once per block; with it, it moves per sample and lands exactly on the committed value.
+void test_param_ramp_smooths_and_lands_exactly()
+{
+  constexpr float kFrom = 0.0f;
+  constexpr float kTo = 10.0f;
+  const auto from_encoded = expected_gain_encoding(kFrom);
+  const auto to_encoded = expected_gain_encoding(kTo);
+
+  auto render = [&](const float ramp_seconds) {
+    auto dsp = nam::get_dsp(model_json(0)); // output == encoded gain
+    auto* film = dynamic_cast<nam::wavenet::FiLMWaveNet*>(dsp.get());
+    auto* control = dynamic_cast<nam::IParametricControl*>(dsp.get());
+    film->SetParamRampSeconds(ramp_seconds);
+    dsp->SetPrewarmOnReset(false);
+    control->SetParams(std::array<float, 2>{kFrom, 1.0f});
+    dsp->Reset(48000.0, 8); // Reset settles, so rendering starts exactly at `from`.
+    // One block at the old setting first, so the control change lands at a block boundary inside
+    // the rendered signal -- which is exactly where an unramped control steps.
+    std::vector<float> rendered;
+    auto out = process(*dsp);
+    rendered.insert(rendered.end(), out.begin(), out.end());
+    control->SetParams(std::array<float, 2>{kTo, 1.0f});
+    // Enough blocks to outlast the ramp itself, derived rather than hardcoded so this keeps
+    // holding when the default time constant is retuned.
+    const int ramp_samples = (int)(48000.0f * nam::wavenet::kDefaultFiLMRampSeconds);
+    const int blocks = ramp_samples / 8 + 40;
+    for (int block = 0; block < blocks; ++block)
+    {
+      out = process(*dsp);
+      rendered.insert(rendered.end(), out.begin(), out.end());
+    }
+    return rendered;
+  };
+
+  auto largest_step = [](const std::vector<float>& v) {
+    auto worst = 0.0f;
+    for (size_t i = 1; i < v.size(); ++i)
+      worst = std::max(worst, std::abs(v[i] - v[i - 1]));
+    return worst;
+  };
+
+  const auto unramped = render(0.0f);
+  const auto ramped = render(nam::wavenet::kDefaultFiLMRampSeconds);
+
+  // Unramped, the whole move lands between two adjacent samples at the block boundary: a
+  // full-range discontinuity in a per-channel gain, which is the zipper.
+  assert(std::abs(largest_step(unramped) - std::abs(to_encoded - from_encoded)) < 1.0e-5f);
+  assert(std::abs(unramped.front() - from_encoded) < 1.0e-5f);
+  assert(std::abs(unramped.back() - to_encoded) < 1.0e-6f);
+
+  // Ramped, no single sample-to-sample step is more than a small fraction of the move. 480
+  // samples of ramp over a 2.0-wide move is ~0.004 per sample; allow an order of magnitude.
+  assert(largest_step(ramped) < 0.05f);
+  // It starts where it was, not at the destination...
+  assert(std::abs(ramped.front() - from_encoded) < 1.0e-6f);
+  // ...moves monotonically...
+  for (size_t i = 1; i < ramped.size(); ++i)
+    assert(ramped[i] >= ramped[i - 1] - 1.0e-6f);
+  // ...and lands exactly on the committed value, with no residual from the accumulation.
+  assert(std::abs(ramped.back() - to_encoded) < 1.0e-6f);
+}
+
 void test_setparams_and_process_realtime_safe()
 {
   auto dsp = nam::get_dsp(model_json());
   dsp->SetPrewarmOnReset(false);
   dsp->Reset(48000.0, 16);
+  // Left ramping on purpose: the ramping branch of ProcessCached() is the one that has to stay
+  // allocation-free, and every SetParams() below re-arms it.
+  assert(dynamic_cast<nam::wavenet::FiLMWaveNet*>(dsp.get())->GetParamRampSeconds() > 0.0f);
   auto* control = dynamic_cast<nam::IParametricControl*>(dsp.get());
   std::array<NAM_SAMPLE, 8> input{};
   std::array<NAM_SAMPLE, 8> output{};
