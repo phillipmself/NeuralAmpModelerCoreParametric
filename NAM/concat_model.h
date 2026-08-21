@@ -53,17 +53,15 @@ public:
 
   void SetParams(const std::span<const float> params) override
   {
-#ifndef NDEBUG
     DebugParamApiGuard guard(_debug_param_api_active);
-#endif
+
     _conditioner.SetParams(params);
   }
 
   std::span<const float> GetParams() const override
   {
-#ifndef NDEBUG
     DebugParamApiGuard guard(_debug_param_api_active);
-#endif
+
     return _conditioner.Params();
   }
 
@@ -73,9 +71,8 @@ public:
 
   void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override
   {
-#ifndef NDEBUG
     DebugParamApiGuard guard(_debug_param_api_active);
-#endif
+
     assert(num_frames <= mMaxBufferSize);
     _inner->process(_conditioner.PrepareBlock(input[0], num_frames), output, num_frames);
   }
@@ -120,9 +117,7 @@ protected:
 private:
   std::unique_ptr<DSP> _inner;
   ConcatConditioner _conditioner;
-#ifndef NDEBUG
   mutable std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
-#endif
 };
 
 } // namespace nam

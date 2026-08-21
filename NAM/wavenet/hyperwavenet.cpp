@@ -176,9 +176,8 @@ HyperWaveNet::HyperWaveNet(int in_channels, const std::vector<LayerArrayParams>&
 
 void HyperWaveNet::SetParams(const std::span<const float> params)
 {
-#ifndef NDEBUG
   DebugParamApiGuard guard(_debug_param_api_active);
-#endif
+
   _hypernet.ValidateParams(params);
   // Regenerating the whole weight set is this model's one expensive operation, so a commit
   // that does not move any control leaves the weights alone. A host that pushes the same
@@ -192,9 +191,8 @@ void HyperWaveNet::SetParams(const std::span<const float> params)
 
 std::span<const float> HyperWaveNet::GetParams() const
 {
-#ifndef NDEBUG
   DebugParamApiGuard guard(_debug_param_api_active);
-#endif
+
   return std::span<const float>(_params);
 }
 
@@ -210,9 +208,8 @@ const std::vector<ParamSpec>& HyperWaveNet::GetParamSpecs() const
 
 void HyperWaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames)
 {
-#ifndef NDEBUG
   DebugParamApiGuard guard(_debug_param_api_active);
-#endif
+
   if (_dirty)
   {
     _hypernet.ApplyConditioning(_base_weights, _params, _conditioned);
@@ -278,4 +275,4 @@ namespace
 {
 static nam::ConfigParserHelper _register_HyperWaveNet("HyperWaveNet", nam::wavenet::create_hyperwavenet_config);
 static nam::ParametricArchitectureHelper _register_parametric_HyperWaveNet("HyperWaveNet");
-}
+} // namespace

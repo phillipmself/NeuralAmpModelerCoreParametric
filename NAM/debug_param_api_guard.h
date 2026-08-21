@@ -1,9 +1,9 @@
 #pragma once
 
-#ifndef NDEBUG
-
 #include <atomic>
+#ifndef NDEBUG
 #include <cassert>
+#endif
 
 namespace nam
 {
@@ -11,8 +11,9 @@ namespace nam
 /// \brief Debug-only reentrancy check for a parametric model's control/process API.
 ///
 /// Asserts on construction that no other guarded call on the same flag is in flight, and
-/// always clears it on destruction (including when unwinding through an exception), so a
-/// single guard instance per call replaces a manual enter/leave pair plus a try/catch.
+/// clears it on destruction (including when unwinding through an exception). In a release
+/// build this is an empty no-op, so call sites need no #ifndef NDEBUG of their own.
+#ifndef NDEBUG
 class DebugParamApiGuard
 {
 public:
@@ -28,7 +29,12 @@ public:
 private:
   std::atomic_flag& _flag;
 };
+#else
+class DebugParamApiGuard
+{
+public:
+  explicit DebugParamApiGuard(std::atomic_flag&) {}
+};
+#endif
 
 } // namespace nam
-
-#endif // NDEBUG

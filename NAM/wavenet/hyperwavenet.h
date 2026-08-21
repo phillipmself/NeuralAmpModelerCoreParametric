@@ -54,9 +54,7 @@ private:
   nam::Hypernetwork _hypernet;
   bool _dirty = true;
   int _param_dim = 0;
-#ifndef NDEBUG
   mutable std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
-#endif
 };
 
 struct HyperWaveNetConfig : public ModelConfig
