@@ -39,16 +39,15 @@ public:
   /// \param sample_rate Rate the model expects to run at; also sizes the smoothing ramp.
   /// \param model_name Architecture name, used only to prefix error messages.
   ConcatModel(std::unique_ptr<DSP> inner, std::vector<ParamSpec> param_specs, const double sample_rate,
-              std::string model_name)
+              const std::string& model_name)
   : DSP(1, inner == nullptr ? 1 : inner->NumOutputChannels(), sample_rate)
   , _inner(std::move(inner))
   , _conditioner(std::move(param_specs))
-  , _model_name(std::move(model_name))
   {
     if (_inner == nullptr)
-      throw std::invalid_argument(_model_name + ": inner model must not be null");
+      throw std::invalid_argument(model_name + ": inner model must not be null");
     if (_inner->NumInputChannels() != _conditioner.NumInputChannels())
-      throw std::invalid_argument(_model_name + ": inner model input channel count does not match encoded params");
+      throw std::invalid_argument(model_name + ": inner model input channel count does not match encoded params");
     _conditioner.Configure(sample_rate);
   }
 
@@ -121,7 +120,6 @@ protected:
 private:
   std::unique_ptr<DSP> _inner;
   ConcatConditioner _conditioner;
-  std::string _model_name;
 #ifndef NDEBUG
   mutable std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
 #endif

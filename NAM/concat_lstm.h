@@ -17,13 +17,6 @@ namespace lstm
 
 /// LSTM conditioned by concatenating encoded controls with the audio input.
 ///
-/// This is the runtime counterpart of the trainer's ConcatLSTM
-/// (nam/models/parametric/_concat_lstm.py), which follows PANAMA (arXiv 2509.26564v1):
-/// encode the control vector, tile it across time, and concatenate it onto the audio at
-/// every timestep before the recurrent core. The recurrence reads its input afresh each
-/// sample, so unlike a hypernetwork model the conditioning can move within a block --
-/// which is why the shared ConcatModel's ramp is meaningful here too.
-///
 /// All of the parameter state and the plumbing that drives the inner network live in
 /// ConcatModel; this class is only the LSTM-specific typing around it.
 class ConcatLSTM : public ConcatModel
