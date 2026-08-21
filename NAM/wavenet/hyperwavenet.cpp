@@ -1,7 +1,6 @@
 #include "hyperwavenet.h"
 
 #include <algorithm>
-#include <cassert>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -178,40 +177,25 @@ HyperWaveNet::HyperWaveNet(int in_channels, const std::vector<LayerArrayParams>&
 void HyperWaveNet::SetParams(const std::span<const float> params)
 {
 #ifndef NDEBUG
-  _debug_enter_param_api_();
-  try
-  {
+  DebugParamApiGuard guard(_debug_param_api_active);
 #endif
-    _hypernet.ValidateParams(params);
-    // Regenerating the whole weight set is this model's one expensive operation, so a commit
-    // that does not move any control leaves the weights alone. A host that pushes the same
-    // vector every block therefore does not re-run the hypernet forever.
-    if (!std::equal(params.begin(), params.end(), _params.begin()))
-    {
-      std::copy(params.begin(), params.end(), _params.begin());
-      _dirty = true;
-    }
-#ifndef NDEBUG
-  }
-  catch (...)
+  _hypernet.ValidateParams(params);
+  // Regenerating the whole weight set is this model's one expensive operation, so a commit
+  // that does not move any control leaves the weights alone. A host that pushes the same
+  // vector every block therefore does not re-run the hypernet forever.
+  if (!std::equal(params.begin(), params.end(), _params.begin()))
   {
-    _debug_leave_param_api_();
-    throw;
+    std::copy(params.begin(), params.end(), _params.begin());
+    _dirty = true;
   }
-  _debug_leave_param_api_();
-#endif
 }
 
 std::span<const float> HyperWaveNet::GetParams() const
 {
 #ifndef NDEBUG
-  const_cast<HyperWaveNet*>(this)->_debug_enter_param_api_();
+  DebugParamApiGuard guard(_debug_param_api_active);
 #endif
-  const auto params = std::span<const float>(_params);
-#ifndef NDEBUG
-  const_cast<HyperWaveNet*>(this)->_debug_leave_param_api_();
-#endif
-  return params;
+  return std::span<const float>(_params);
 }
 
 int HyperWaveNet::ParamDim() const
@@ -227,39 +211,16 @@ const std::vector<ParamSpec>& HyperWaveNet::GetParamSpecs() const
 void HyperWaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames)
 {
 #ifndef NDEBUG
-  _debug_enter_param_api_();
-  try
+  DebugParamApiGuard guard(_debug_param_api_active);
+#endif
+  if (_dirty)
   {
-#endif
-    if (_dirty)
-    {
-      _hypernet.ApplyConditioning(_base_weights, _params, _conditioned);
-      WaveNet::set_weights_(_conditioned);
-      _dirty = false;
-    }
-    WaveNet::process(input, output, num_frames);
-#ifndef NDEBUG
+    _hypernet.ApplyConditioning(_base_weights, _params, _conditioned);
+    WaveNet::set_weights_(_conditioned);
+    _dirty = false;
   }
-  catch (...)
-  {
-    _debug_leave_param_api_();
-    throw;
-  }
-  _debug_leave_param_api_();
-#endif
+  WaveNet::process(input, output, num_frames);
 }
-
-#ifndef NDEBUG
-void HyperWaveNet::_debug_enter_param_api_()
-{
-  assert(!_debug_param_api_active.test_and_set(std::memory_order_acquire));
-}
-
-void HyperWaveNet::_debug_leave_param_api_()
-{
-  _debug_param_api_active.clear(std::memory_order_release);
-}
-#endif
 
 std::unique_ptr<DSP> HyperWaveNetConfig::create(std::vector<float> weights, const double sampleRate)
 {

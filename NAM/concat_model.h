@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "concat_conditioner.h"
+#include "debug_param_api_guard.h"
 #include "dsp.h"
 #include "parametric_control.h"
 
@@ -54,32 +55,17 @@ public:
   void SetParams(const std::span<const float> params) override
   {
 #ifndef NDEBUG
-    _debug_enter_param_api_();
-    try
-    {
+    DebugParamApiGuard guard(_debug_param_api_active);
 #endif
-      _conditioner.SetParams(params);
-#ifndef NDEBUG
-    }
-    catch (...)
-    {
-      _debug_leave_param_api_();
-      throw;
-    }
-    _debug_leave_param_api_();
-#endif
+    _conditioner.SetParams(params);
   }
 
   std::span<const float> GetParams() const override
   {
 #ifndef NDEBUG
-    const_cast<ConcatModel*>(this)->_debug_enter_param_api_();
+    DebugParamApiGuard guard(_debug_param_api_active);
 #endif
-    const auto result = _conditioner.Params();
-#ifndef NDEBUG
-    const_cast<ConcatModel*>(this)->_debug_leave_param_api_();
-#endif
-    return result;
+    return _conditioner.Params();
   }
 
   int ParamDim() const override { return _conditioner.ParamDim(); }
@@ -89,21 +75,10 @@ public:
   void process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int num_frames) override
   {
 #ifndef NDEBUG
-    _debug_enter_param_api_();
-    try
-    {
+    DebugParamApiGuard guard(_debug_param_api_active);
 #endif
-      assert(num_frames <= mMaxBufferSize);
-      _inner->process(_conditioner.PrepareBlock(input[0], num_frames), output, num_frames);
-#ifndef NDEBUG
-    }
-    catch (...)
-    {
-      _debug_leave_param_api_();
-      throw;
-    }
-    _debug_leave_param_api_();
-#endif
+    assert(num_frames <= mMaxBufferSize);
+    _inner->process(_conditioner.PrepareBlock(input[0], num_frames), output, num_frames);
   }
 
   void Reset(const double sampleRate, const int maxBufferSize) override
@@ -144,17 +119,11 @@ protected:
   }
 
 private:
-#ifndef NDEBUG
-  void _debug_enter_param_api_() { assert(!_debug_param_api_active.test_and_set(std::memory_order_acquire)); }
-
-  void _debug_leave_param_api_() { _debug_param_api_active.clear(std::memory_order_release); }
-#endif
-
   std::unique_ptr<DSP> _inner;
   ConcatConditioner _conditioner;
   std::string _model_name;
 #ifndef NDEBUG
-  std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
+  mutable std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
 #endif
 };
 
