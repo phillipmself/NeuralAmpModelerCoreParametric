@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include "../debug_param_api_guard.h"
 #include "../hypernet.h"
 #include "../model_config.h"
 #include "../parametric_control.h"
@@ -46,11 +47,6 @@ public:
   void process(NAM_SAMPLE** input, NAM_SAMPLE** output, int num_frames) override;
 
 private:
-#ifndef NDEBUG
-  void _debug_enter_param_api_();
-  void _debug_leave_param_api_();
-#endif
-
   std::vector<ParamSpec> _param_specs;
   std::vector<float> _params;
   std::vector<float> _base_weights;
@@ -58,9 +54,7 @@ private:
   nam::Hypernetwork _hypernet;
   bool _dirty = true;
   int _param_dim = 0;
-#ifndef NDEBUG
-  std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
-#endif
+  mutable std::atomic_flag _debug_param_api_active = ATOMIC_FLAG_INIT;
 };
 
 struct HyperWaveNetConfig : public ModelConfig

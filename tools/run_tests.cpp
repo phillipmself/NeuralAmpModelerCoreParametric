@@ -6,6 +6,7 @@
 #include "test/test_conv1d.cpp"
 #include "test/test_conv_1x1.cpp"
 #include "test/test_convnet.cpp"
+#include "test/test_concat_lstm.cpp"
 #include "test/test_concat_wavenet.cpp"
 #include "test/test_concat_wavenet_parity.cpp"
 #include "test/test_dsp.cpp"
@@ -120,6 +121,11 @@ int main()
   test_hyperwavenet::test_ignores_step_and_avoid_zero();
   test_hyperwavenet_parity::test_matches_python_golden_and_baked_wavenet();
   test_hyperwavenet_parity::test_setparams_process_no_allocation_real_model();
+  test_concat_lstm::test_load_and_control();
+  test_concat_lstm::test_matches_manual_lstm();
+  test_concat_lstm::test_parser_validation();
+  test_concat_lstm::test_weight_count_validation();
+  test_concat_lstm::test_setparams_and_process_realtime_safe();
   test_concat_wavenet::test_load_control_and_continuous_encoding();
   test_concat_wavenet::test_switch_one_hot_encoding();
   test_concat_wavenet::test_matches_manual_concat_wavenet();
