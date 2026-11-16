@@ -106,6 +106,7 @@ int main()
   test_hypernet::test_apply_conditioning_offsets();
   test_hypernet::test_constructor_validation();
   test_hypernet::test_mixed_targets_and_repeated_calls();
+  test_hyperwavenet::test_implements_slimmable_backend();
   test_hyperwavenet::test_load_and_control_hyperwavenet();
   test_hyperwavenet::test_load_and_control_low_rank_hyperwavenet();
   test_hyperwavenet::test_reject_condition_dsp_for_now();

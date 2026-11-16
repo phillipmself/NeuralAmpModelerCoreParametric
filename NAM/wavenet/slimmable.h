@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <vector>
 
 // std::atomic<std::shared_ptr<T>> requires C++20 library support (libstdc++ >= GCC 12).
@@ -62,6 +63,16 @@ public:
   void SetSlimmableSize(const double val) override;
   std::vector<double> GetSlimmableSizeBreakpoints() const override;
 
+  /// Replace the full-size weight blob and push it into the active (possibly slimmed)
+  /// WaveNet without rebuilding topology. Clears any pending staged rebuild so it cannot
+  /// overwrite the new weights on the next process().
+  ///
+  /// Same length as the construction-time full weights is required. After the model has
+  /// been built (and after any SetSlimmableSize rebuild), the active-weight scratch is
+  /// capacity-reserved so a subsequent call does not allocate — callers that need
+  /// real-time safety rely on that.
+  void UpdateFullWeights(std::span<const float> full_weights);
+
 protected:
   int GetPrewarmSamples() override { return 0; }
 
@@ -73,6 +84,9 @@ private:
   bool _with_head;
   nlohmann::json _condition_dsp_json;
   std::vector<float> _full_weights;
+  /// Scratch matching the active WaveNet's weight layout (full or slimmed). Kept with
+  /// reserved capacity across UpdateFullWeights so the audio thread can refill in place.
+  std::vector<float> _active_weights;
   /// Shared ownership so a staged model can be moved onto the active slot without
   /// transferring from a concurrent writer.
   std::shared_ptr<DSP> _active_model;

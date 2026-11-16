@@ -11,6 +11,7 @@
 
 #include "NAM/get_dsp.h"
 #include "NAM/parametric_control.h"
+#include "NAM/slimmable.h"
 #include "allocation_tracking.h"
 
 namespace test_hyperwavenet
@@ -236,6 +237,18 @@ void assert_throws_runtime_error(Fn&& fn, const std::string& expected_substring)
 }
 
 } // namespace
+
+void test_implements_slimmable_backend()
+{
+  auto dsp = nam::get_dsp(make_config());
+  assert(dsp != nullptr);
+
+  auto* slimmable = dynamic_cast<nam::SlimmableModel*>(dsp.get());
+  assert(slimmable != nullptr);
+  // Default fixture has no slimmable metadata → full-size-only allowed_channels.
+  assert(slimmable->GetSlimmableSizeBreakpoints().empty());
+  slimmable->SetSlimmableSize(1.0);
+}
 
 void test_load_and_control_hyperwavenet()
 {

@@ -147,6 +147,54 @@ void validate_target_ranges(const std::vector<nam::Hypernetwork::Target>& target
   }
 }
 
+std::vector<std::vector<int>> parse_per_array_allowed_channels(const nlohmann::json& config,
+                                                               const std::vector<nam::wavenet::LayerArrayParams>& params)
+{
+  if (!config.contains("layers") || !config.at("layers").is_array())
+    throw std::runtime_error("HyperWaveNet config missing layers array.");
+  if (config.at("layers").size() != params.size())
+    throw std::runtime_error("HyperWaveNet config: layers size mismatch after parse.");
+
+  constexpr const char* kMethod = "slice_channels_uniform";
+  std::vector<std::vector<int>> per_array_allowed;
+  per_array_allowed.reserve(params.size());
+
+  for (size_t i = 0; i < params.size(); ++i)
+  {
+    const auto& lc = config.at("layers").at(i);
+    std::vector<int> allowed;
+
+    if (lc.contains("slimmable") && lc.at("slimmable").is_object())
+    {
+      const auto& slim_cfg = lc.at("slimmable");
+      const std::string method = slim_cfg.value("method", "");
+      if (method != kMethod)
+        throw std::runtime_error("HyperWaveNet: unsupported slimmable method '" + method + "'");
+
+      if (slim_cfg.contains("kwargs") && slim_cfg.at("kwargs").contains("allowed_channels"))
+      {
+        for (const auto& ch : slim_cfg.at("kwargs").at("allowed_channels"))
+          allowed.push_back(ch.get<int>());
+      }
+      else
+      {
+        const int channels = params[i].channels;
+        for (int c = 1; c <= channels; ++c)
+          allowed.push_back(c);
+      }
+    }
+    else
+    {
+      // No slimmable metadata: still use SlimmableWavenet as the backend, but only at full size.
+      allowed.push_back(params[i].channels);
+    }
+
+    per_array_allowed.push_back(std::move(allowed));
+  }
+
+  return per_array_allowed;
+}
+
 } // namespace
 
 namespace nam
@@ -154,13 +202,13 @@ namespace nam
 namespace wavenet
 {
 
-HyperWaveNet::HyperWaveNet(int in_channels, const std::vector<LayerArrayParams>& layer_array_params, float head_scale,
-                           bool with_head, std::optional<HeadParams> head_params, std::unique_ptr<DSP> condition_dsp,
+HyperWaveNet::HyperWaveNet(std::unique_ptr<slimmable_wavenet::SlimmableWavenet> backend,
                            std::vector<ParamSpec> param_specs, const nam::HypernetSpec& hypernet_spec,
                            std::vector<float> base_weights, const std::span<const float> hypernet_state,
                            const double sample_rate)
-: WaveNet(in_channels, layer_array_params, head_scale, with_head, std::move(head_params),
-          std::vector<float>(base_weights), std::move(condition_dsp), sample_rate)
+: DSP(backend == nullptr ? 1 : backend->NumInputChannels(), backend == nullptr ? 1 : backend->NumOutputChannels(),
+      sample_rate)
+, _backend(std::move(backend))
 , _param_specs(std::move(param_specs))
 , _params(nominal_from_specs(_param_specs))
 , _base_weights(std::move(base_weights))
@@ -169,9 +217,12 @@ HyperWaveNet::HyperWaveNet(int in_channels, const std::vector<LayerArrayParams>&
 , _dirty(true)
 , _param_dim(static_cast<int>(_param_specs.size()))
 {
+  if (_backend == nullptr)
+    throw std::invalid_argument("HyperWaveNet: backend must not be null");
   if (_param_specs.empty())
     throw std::invalid_argument("HyperWaveNet: param_specs must contain at least one parameter");
   _hypernet.ValidateParams(_params);
+  _backend->SetPrewarmOnReset(GetPrewarmOnReset());
 }
 
 void HyperWaveNet::SetParams(const std::span<const float> params)
@@ -213,10 +264,59 @@ void HyperWaveNet::process(NAM_SAMPLE** input, NAM_SAMPLE** output, const int nu
   if (_dirty)
   {
     _hypernet.ApplyConditioning(_base_weights, _params, _conditioned);
-    WaveNet::set_weights_(_conditioned);
+    _backend->UpdateFullWeights(_conditioned);
     _dirty = false;
   }
-  WaveNet::process(input, output, num_frames);
+  _backend->process(input, output, num_frames);
+}
+
+void HyperWaveNet::prewarm()
+{
+  if (_dirty)
+  {
+    _hypernet.ApplyConditioning(_base_weights, _params, _conditioned);
+    _backend->UpdateFullWeights(_conditioned);
+    _dirty = false;
+  }
+  _backend->prewarm();
+}
+
+void HyperWaveNet::Reset(const double sampleRate, const int maxBufferSize)
+{
+  // Apply any pending conditioning before the backend prewarms, so settle uses the
+  // committed control state rather than the raw base weights.
+  if (_dirty)
+  {
+    _hypernet.ApplyConditioning(_base_weights, _params, _conditioned);
+    _backend->UpdateFullWeights(_conditioned);
+    _dirty = false;
+  }
+
+  _backend->Reset(sampleRate, maxBufferSize);
+
+  // Backend Reset already prewarmed the active WaveNet when prewarm-on-reset is set.
+  // Sync outer DSP buffer/sample-rate state without a second prewarm through process().
+  const bool prewarm_on_reset = GetPrewarmOnReset();
+  SetPrewarmOnReset(false);
+  DSP::Reset(sampleRate, maxBufferSize);
+  SetPrewarmOnReset(prewarm_on_reset);
+}
+
+void HyperWaveNet::SetPrewarmOnReset(const bool prewarmOnReset)
+{
+  DSP::SetPrewarmOnReset(prewarmOnReset);
+  if (_backend)
+    _backend->SetPrewarmOnReset(prewarmOnReset);
+}
+
+void HyperWaveNet::SetSlimmableSize(const double val)
+{
+  _backend->SetSlimmableSize(val);
+}
+
+std::vector<double> HyperWaveNet::GetSlimmableSizeBreakpoints() const
+{
+  return _backend->GetSlimmableSizeBreakpoints();
 }
 
 std::unique_ptr<DSP> HyperWaveNetConfig::create(std::vector<float> weights, const double sampleRate)
@@ -244,9 +344,15 @@ std::unique_ptr<DSP> HyperWaveNetConfig::create(std::vector<float> weights, cons
   std::vector<float> base_weights(weights.begin(), weights.begin() + static_cast<std::ptrdiff_t>(base_len));
   std::vector<float> hypernet_state(weights.begin() + static_cast<std::ptrdiff_t>(base_len), weights.end());
 
-  return std::make_unique<HyperWaveNet>(inner.in_channels, inner.layer_array_params, inner.head_scale, inner.with_head,
-                                        std::move(inner.head_params), std::move(inner.condition_dsp), std::move(params),
-                                        std::move(hypernet), std::move(base_weights), hypernet_state, sampleRate);
+  // SlimmableWavenet takes ownership of its own full-weight copy; HyperWaveNet keeps base_weights
+  // for conditioning.
+  std::vector<float> backend_weights = base_weights;
+  auto backend = std::make_unique<slimmable_wavenet::SlimmableWavenet>(
+    inner.layer_array_params, per_array_allowed_channels, inner.in_channels, inner.head_scale, inner.with_head,
+    nlohmann::json(), std::move(backend_weights), sampleRate);
+
+  return std::make_unique<HyperWaveNet>(std::move(backend), std::move(params), std::move(hypernet),
+                                        std::move(base_weights), hypernet_state, sampleRate);
 }
 
 std::unique_ptr<ModelConfig> create_hyperwavenet_config(const nlohmann::json& config, const double sampleRate)
@@ -265,6 +371,8 @@ std::unique_ptr<ModelConfig> create_hyperwavenet_config(const nlohmann::json& co
   hyperwavenet_config->inner = parse_config_json(config, sampleRate);
   hyperwavenet_config->params = nam::parse_param_specs(config, "HyperWaveNet");
   hyperwavenet_config->hypernet = parse_hypernet(config);
+  hyperwavenet_config->per_array_allowed_channels =
+    parse_per_array_allowed_channels(config, hyperwavenet_config->inner.layer_array_params);
   return hyperwavenet_config;
 }
 

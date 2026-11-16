@@ -44,9 +44,9 @@ void extract_conv1x1(std::vector<float>::const_iterator& src, int full_in, int f
 }
 
 // Extract Conv1D weight subset: take first slim_out output channels, first slim_in input channels.
-// Full layout (groups=1): for each out i, for each in j, for each kernel tap k: weight. Then bias(out).
+// Full layout (groups=1): for each out i, for each in j, for each kernel tap k: weight. Then optional bias(out).
 void extract_conv1d(std::vector<float>::const_iterator& src, int full_in, int full_out, int slim_in, int slim_out,
-                    int kernel_size, std::vector<float>& dst)
+                    int kernel_size, bool bias, std::vector<float>& dst)
 {
   for (int i = 0; i < full_out; i++)
   {
@@ -60,12 +60,14 @@ void extract_conv1d(std::vector<float>::const_iterator& src, int full_in, int fu
       }
     }
   }
-  // Bias is always present for conv in WaveNet layers
-  for (int i = 0; i < full_out; i++)
+  if (bias)
   {
-    float b = *(src++);
-    if (i < slim_out)
-      dst.push_back(b);
+    for (int i = 0; i < full_out; i++)
+    {
+      float b = *(src++);
+      if (i < slim_out)
+        dst.push_back(b);
+    }
   }
 }
 
@@ -125,23 +127,16 @@ std::vector<double> get_ratio_breakpoints(const std::vector<std::vector<int>>& p
 // order, using typed LayerArrayParams for dimensions.
 // ============================================================================
 
-std::vector<float> extract_slimmed_weights(const std::vector<wavenet::LayerArrayParams>& original_params,
-                                           const std::vector<float>& full_weights,
-                                           const std::vector<int>& new_channels_per_array)
+void extract_slimmed_weights_into(const std::vector<wavenet::LayerArrayParams>& original_params,
+                                  const std::vector<float>& full_weights,
+                                  const std::vector<int>& new_channels_per_array, std::vector<float>& slim)
 {
-  std::vector<float> slim;
   auto src = full_weights.cbegin();
   const int num_arrays = (int)original_params.size();
 
   for (int arr = 0; arr < num_arrays; arr++)
   {
     const auto& p = original_params[arr];
-    if (p.head_kernel_size != 1)
-    {
-      throw std::runtime_error(
-        "SlimmableWavenet: head rechannel kernel_size must be 1 (slimming with head kernel_size > 1 is not "
-        "implemented)");
-    }
     validate_groups(p);
 
     const int full_ch = p.channels;
@@ -171,7 +166,7 @@ std::vector<float> extract_slimmed_weights(const std::vector<wavenet::LayerArray
       const int slim_bg = gated ? 2 * slim_bn : slim_bn;
 
       // conv: Conv1D(channels -> B_g, K, bias=true)
-      extract_conv1d(src, full_ch, full_bg, slim_ch, slim_bg, kernel_size, slim);
+      extract_conv1d(src, full_ch, full_bg, slim_ch, slim_bg, kernel_size, true, slim);
 
       // input_mixin: Conv1x1(condition_size -> B_g, no bias)
       extract_conv1x1(src, p.condition_size, full_bg, p.condition_size, slim_bg, false, slim);
@@ -250,13 +245,24 @@ std::vector<float> extract_slimmed_weights(const std::vector<wavenet::LayerArray
       }
     }
 
-    // ---- head_rechannel: Conv1x1(head_output_size -> head_size, bias=head_bias) ----
-    extract_conv1x1(src, full_head_out, p.head_size, slim_head_out, slim_head_size, p.head_bias, slim);
+    // ---- head_rechannel: Conv1D(head_output_size -> head_size, K, bias=head_bias) ----
+    if (p.head_kernel_size == 1)
+      extract_conv1x1(src, full_head_out, p.head_size, slim_head_out, slim_head_size, p.head_bias, slim);
+    else
+      extract_conv1d(src, full_head_out, p.head_size, slim_head_out, slim_head_size, p.head_kernel_size, p.head_bias,
+                     slim);
   }
 
   // head_scale: 1 float, copy as-is
   slim.push_back(*(src++));
+}
 
+std::vector<float> extract_slimmed_weights(const std::vector<wavenet::LayerArrayParams>& original_params,
+                                           const std::vector<float>& full_weights,
+                                           const std::vector<int>& new_channels_per_array)
+{
+  std::vector<float> slim;
+  extract_slimmed_weights_into(original_params, full_weights, new_channels_per_array, slim);
   return slim;
 }
 
@@ -420,32 +426,70 @@ std::vector<int> SlimmableWavenet::_get_channels_for_slimmable_size(const double
 
 std::unique_ptr<DSP> SlimmableWavenet::_create_wavenet_for_channels(const std::vector<int>& target_channels)
 {
-  std::vector<float> weights;
   std::vector<wavenet::LayerArrayParams> modified_params;
   const std::vector<wavenet::LayerArrayParams>* params_ptr;
 
+  _active_weights.clear();
   if (is_full_size(_original_params, target_channels))
   {
-    weights = _full_weights;
+    _active_weights = _full_weights;
     params_ptr = &_original_params;
   }
   else
   {
-    weights = extract_slimmed_weights(_original_params, _full_weights, target_channels);
+    extract_slimmed_weights_into(_original_params, _full_weights, target_channels, _active_weights);
     modified_params = modify_params_for_channels(_original_params, target_channels);
     params_ptr = &modified_params;
   }
+  // Keep capacity for later UpdateFullWeights refill on the audio thread.
+  _active_weights.reserve(_active_weights.size());
 
   // Rebuild condition_dsp if present (WaveNet takes ownership each time)
   std::unique_ptr<DSP> condition_dsp;
   if (!_condition_dsp_json.is_null())
     condition_dsp = get_dsp(_condition_dsp_json);
 
+  // WaveNet constructor consumes the weight vector; hand it a copy so _active_weights stays
+  // as the RT refill scratch for UpdateFullWeights.
+  std::vector<float> weights_for_ctor = _active_weights;
+
   double sampleRate = _current_sample_rate > 0 ? _current_sample_rate : GetExpectedSampleRate();
   auto model = std::make_unique<wavenet::WaveNet>(_in_channels, *params_ptr, _head_scale, _with_head, std::nullopt,
-                                                  std::move(weights), std::move(condition_dsp), sampleRate);
+                                                  std::move(weights_for_ctor), std::move(condition_dsp), sampleRate);
   model->SetPrewarmOnReset(GetPrewarmOnReset());
   return model;
+}
+
+void SlimmableWavenet::UpdateFullWeights(std::span<const float> full_weights)
+{
+  if (full_weights.size() != _full_weights.size())
+  {
+    throw std::runtime_error("SlimmableWavenet::UpdateFullWeights: weight length mismatch (got "
+                             + std::to_string(full_weights.size()) + ", expected "
+                             + std::to_string(_full_weights.size()) + ")");
+  }
+  if (!_active_model)
+    throw std::runtime_error("SlimmableWavenet::UpdateFullWeights: no active model");
+
+  std::copy(full_weights.begin(), full_weights.end(), _full_weights.begin());
+
+  // Any staged rebuild was built from the previous full weights; drop it so process()
+  // cannot install stale weights over this update.
+  _pending_clear_release();
+
+  auto* wavenet = dynamic_cast<wavenet::WaveNet*>(_active_model.get());
+  if (wavenet == nullptr)
+    throw std::runtime_error("SlimmableWavenet::UpdateFullWeights: active model is not a WaveNet");
+
+  if (is_full_size(_original_params, _current_channels))
+  {
+    wavenet->set_weights_(_full_weights);
+    return;
+  }
+
+  _active_weights.clear();
+  extract_slimmed_weights_into(_original_params, _full_weights, _current_channels, _active_weights);
+  wavenet->set_weights_(_active_weights);
 }
 
 void SlimmableWavenet::_rebuild_model(const std::vector<int>& target_channels)
